@@ -19,39 +19,6 @@ mod dat_parser;
 mod pf_parser;
 mod texture_decompress;
 
-const CRC32C_POLYNOMIAL: u32 = 0x1EDC6F41;
-
-pub struct Crc32c {
-    table: [u32; 256],
-}
-
-impl Crc32c {
-    pub fn new() -> Self {
-        let mut table = [0u32; 256];
-        for i in 0..256 {
-            let mut crc = i as u32;
-            for _ in 0..8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ CRC32C_POLYNOMIAL;
-                } else {
-                    crc >>= 1;
-                }
-            }
-            table[i] = crc;
-        }
-        Self { table }
-    }
-
-    pub fn compute(&self, data: &[u8]) -> u32 {
-        let mut crc = 0xFFFFFFFF;
-        for &byte in data {
-            let table_index = ((crc ^ (byte as u32)) & 0xFF) as usize;
-            crc = (crc >> 8) ^ self.table[table_index];
-        }
-        !crc
-    }
-}
-
 fn compute_crc32c_from_file(file_path: &str) -> io::Result<u32> {
     let file = File::open(file_path)?;
     let mut reader = BufReader::new(file);
@@ -63,10 +30,9 @@ fn compute_crc32c_from_file(file_path: &str) -> io::Result<u32> {
     // Optionally, you can adjust here to compute CRC only over a specific part of the file.
     // For example, you might want to compute CRC only for the header or data section.
 
-    // Create a new CRC-32C instance
-    let crc32c = Crc32c::new();
+    let result_data = crc32c::crc32c(&buffer);
     // Compute the CRC-32C checksum
-    Ok(crc32c.compute(&buffer))
+    Ok(result_data)
 }
 
 fn main() -> io::Result<()> {

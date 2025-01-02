@@ -103,11 +103,11 @@ fn remove_and_print_bytes_at_intervals(data: &mut Vec<u8>, interval: u64) {
         let end = start + 4;
 
         if end <= data.len() {
-            let removed = &data[start..end];
+            let mut removed = &data[start..end];
             removed_bytes.extend_from_slice(removed);
-
+            let result = removed.read_u32::<LittleEndian>().unwrap();
             // Print the removed bytes in hexadecimal format
-            println!("Removed bytes at 0x{:08X}: {:02X?}", position, removed);
+            println!("Removed bytes at 0x{:08X}: 0x{:X?}", position, result);
             positions_to_remove.push(start);
         }
 
@@ -118,9 +118,12 @@ fn remove_and_print_bytes_at_intervals(data: &mut Vec<u8>, interval: u64) {
     // Handle removing bytes before EOF (4 bytes before the last position)
     if data_len > 4 {
         let eof_position = data_len - 4;
-        let removed = &data[eof_position as usize..data_len as usize];
+        let mut removed = &data[eof_position as usize..data_len as usize];
+
         removed_bytes.extend_from_slice(removed);
-        println!("Removed bytes before EOF: {:02X?}", removed);
+        let result = removed.read_u32::<LittleEndian>().unwrap();
+        // Print the removed bytes in hexadecimal format
+        println!("Removed bytes at 0x{:08X}: 0x{:X?}", eof_position, result);
         positions_to_remove.push(eof_position as usize);
     }
 
