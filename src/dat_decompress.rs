@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::Cursor;
+use std::io::{Cursor, Seek};
 
 const MAX_BITS_HASH: usize = 8;
 const MAX_CODE_BITS_LENGTH: usize = 32;
 const MAX_SYMBOL_VALUE: usize = 285;
 
-const SKIPPED_BYTES_PER_CHUNK: usize = 16384; // 0x4000
+// const SKIPPED_BYTES_PER_CHUNK: usize = 65536; // its using CRC-32C in hxd editor
+// CRC-32C (Cyclic Redundancy Check 32-bit Castagnoli) is a variant of the CRC-32 algorithm that uses the Castagnoli polynomial.
+// its in each SKIPPED_BYTES_PER_CHUNK-4 until SKIPPED_BYTES_PER_CHUNK and 4 bytes before the end of chunk
+const SKIPPED_BYTES_PER_CHUNK: usize = 0;
+
 const BYTES_TO_REMOVE: usize = 4; // sizeof(u32)
 
 #[derive(Debug, Default)]
@@ -72,18 +76,24 @@ fn pull_byte(
 ) -> std::io::Result<()> {
     if state_data.bytes_available >= std::mem::size_of::<u32>() as u32 {
         if state_data.skipped_bytes != 0 {
-            if ((state_data.buffer_position / std::mem::size_of::<u32>() as u64) + 1)
-                % state_data.skipped_bytes as u64
-                == 0
+            if ((state_data.input_buffer.position() + 4) % state_data.skipped_bytes as u64) == 0
+            // || ((state_data.input_buffer.position() + 4)
+            //     == state_data.input_buffer.stream_len()?)
             {
-                state_data.bytes_available -= std::mem::size_of::<u32>() as u32;
+                println!("Buffer position : {}", state_data.input_buffer.position());
+                state_data.bytes_available =
+                    state_data.bytes_available - std::mem::size_of::<u32>() as u32;
                 let unknown_data = state_data.input_buffer.read_u32::<LittleEndian>()?; // Skipping 4 bytes, for CRC probably
+                // let unknown_data: u32 = read_bits(state_data, 32)?;
+
+                // state_data.buffer_position =
+                //     state_data.input_buffer.position() + std::mem::size_of::<u32>() as u64;
+                state_data.buffer_position = state_data.input_buffer.position();
                 println!(
                     "Unknown data : {:X?} in position : {}",
                     unknown_data,
                     state_data.input_buffer.position()
                 );
-                state_data.buffer_position = state_data.input_buffer.position();
             }
         }
         *head_data = state_data.input_buffer.read_u32::<LittleEndian>()?;
@@ -200,6 +210,7 @@ pub fn inflate_dat_file_buffer(
     state_data.skipped_bytes = SKIPPED_BYTES_PER_CHUNK as u32;
     let mut head_data: u32 = 0;
     let mut bytes_available_data: u8 = 0;
+    // println!("Buffer position : {}", state_data.input_buffer.position());
 
     pull_byte(&mut state_data, &mut head_data, &mut bytes_available_data)?;
 
@@ -207,8 +218,11 @@ pub fn inflate_dat_file_buffer(
     state_data.bytes_available_data = bytes_available_data;
 
     drop_bits(&mut state_data, 32)?;
+
     *output_data_size = read_bits(&mut state_data, 32)?;
+
     drop_bits(&mut state_data, 32)?;
+
     output_data.resize(*output_data_size as usize, 0);
 
     inflate_data(&mut state_data, output_data_size, output_data)?;
@@ -223,10 +237,12 @@ fn inflate_data(
     let mut output_position: u32 = 0;
     #[allow(unused_assignments)]
     let mut write_size_const_addition: u16 = 0;
+
     drop_bits(state_data, 4)?;
     write_size_const_addition = read_bits(state_data, 4)? as u16;
     write_size_const_addition += 1;
     drop_bits(state_data, 4)?;
+
     let mut dat_file_huffmantree_dict = HuffmanTree::default();
     let mut huffmantree_copy = HuffmanTree::default();
     let mut huffmantree_symbol = HuffmanTree::default();
@@ -254,8 +270,10 @@ fn inflate_data(
 
         #[allow(unused_assignments)]
         let mut max_count: u32 = 0;
+        let _buff_pos = state_data.input_buffer.position();
 
         max_count = read_bits(state_data, 4)?;
+
         max_count = (max_count + 1) << 12;
         drop_bits(state_data, 4)?;
         let mut current_code_read_count: u32 = 0;
@@ -624,6 +642,10 @@ fn add_symbol(
     symbol_data: u16,
     bit_data: u8,
 ) -> std::io::Result<()> {
+    if symbol_data == 12842 {
+        println!("Symbol data : {} Bit data : {}", symbol_data, bit_data);
+    }
+
     if huffmantree_builder.bits_head_exist[bit_data as usize] {
         huffmantree_builder.bits_body[symbol_data as usize] =
             huffmantree_builder.bits_head[bit_data as usize];

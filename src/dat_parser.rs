@@ -2,7 +2,7 @@
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read, Seek, Write};
 use std::path::Path;
 
 use crate::{dat_decompress, texture_decompress};
@@ -90,6 +90,60 @@ pub struct DatFile {
     pub dat_file: BufReader<File>,
 }
 
+fn remove_and_print_bytes_at_intervals(data: &mut Vec<u8>, interval: u64) {
+    let mut position = interval - 4; // Start at the first position (interval - 4)
+    let mut removed_bytes = Vec::new();
+    let data_len = data.len() as u64;
+
+    // Track positions to remove
+    let mut positions_to_remove = Vec::new();
+
+    while position < data_len {
+        let start = position as usize;
+        let end = start + 4;
+
+        if end <= data.len() {
+            let removed = &data[start..end];
+            removed_bytes.extend_from_slice(removed);
+
+            // Print the removed bytes in hexadecimal format
+            println!("Removed bytes at 0x{:08X}: {:02X?}", position, removed);
+            positions_to_remove.push(start);
+        }
+
+        // Move to the next interval
+        position += interval;
+    }
+
+    // Handle removing bytes before EOF (4 bytes before the last position)
+    if data_len > 4 {
+        let eof_position = data_len - 4;
+        let removed = &data[eof_position as usize..data_len as usize];
+        removed_bytes.extend_from_slice(removed);
+        println!("Removed bytes before EOF: {:02X?}", removed);
+        positions_to_remove.push(eof_position as usize);
+    }
+
+    // Remove the bytes at the specified positions
+    let mut new_data = Vec::new();
+    let mut pos = 0;
+    while pos < data.len() {
+        if positions_to_remove.contains(&pos) {
+            // Skip the next 4 bytes
+            pos += 4;
+            continue;
+        }
+        new_data.push(data[pos]);
+        pos += 1;
+    }
+
+    // Update the original data vector
+    *data = new_data;
+
+    // Print the new buffer length
+    println!("Buffer Length: {}", data.len());
+}
+
 impl DatFile {
     /// Load a `.dat` file and parse its contents into a `DatFile` structure.
     pub fn load<P: AsRef<Path>>(file_path: P) -> std::io::Result<DatFile> {
@@ -147,8 +201,8 @@ impl DatFile {
         self.mft_header.mft_entry_size = self.dat_file.read_u32::<LittleEndian>()?;
         self.mft_header.unknown_field_2 = self.dat_file.read_u32::<LittleEndian>()?;
         self.mft_header.unknown_field_3 = self.dat_file.read_u32::<LittleEndian>()?;
-
         self.mft_header.mft_entry_size = self.mft_header.mft_entry_size - 1;
+
         Ok(())
     }
 
@@ -228,7 +282,15 @@ impl DatFile {
             let byte = self.dat_file.read_u8()?;
             buffer_data.push(byte);
         }
+
+        // let mut dump_data = File::create("buffer_31.bin")?;
+        // dump_data.write_all(&buffer_data)?;
+
+        remove_and_print_bytes_at_intervals(&mut buffer_data, 0x10000);
+
         println!("\nBuffer Length : {}", buffer_size);
+        println!("\nActual Buffer Length : {}", buffer_data.len());
+
         self.hex_dump(&buffer_data);
         name_file = index_found.to_string();
 
