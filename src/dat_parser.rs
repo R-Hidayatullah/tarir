@@ -229,22 +229,23 @@ impl DatFile {
 
         let chunk_count = buffer_size / 0x10000;
         let last_chunk_size: usize = (buffer_size as usize % 0x10000) - 4;
-        let mut chunk_buffer: Vec<u8> = Vec::with_capacity(0x10000 - 4);
-        chunk_buffer.resize(0x10000 - 4, 0);
-        let mut last_chunk_buffer: Vec<u8> = Vec::with_capacity(last_chunk_size);
-        last_chunk_buffer.resize(last_chunk_size, 0);
+
         println!(
             "Chunk count : {} Chunk size : {}",
             chunk_count, last_chunk_size
         );
         if chunk_count >= 1 {
             for _ in 0..chunk_count {
+                let mut chunk_buffer: Vec<u8> = Vec::with_capacity(0x10000 - 4);
+                chunk_buffer.resize(0x10000 - 4, 0);
                 self.dat_file.read_exact(&mut chunk_buffer)?;
                 buffer_data.append(&mut chunk_buffer);
                 result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
             }
         }
 
+        let mut last_chunk_buffer: Vec<u8> = Vec::with_capacity(last_chunk_size);
+        last_chunk_buffer.resize(last_chunk_size, 0);
         self.dat_file.read_exact(&mut last_chunk_buffer)?;
         buffer_data.append(&mut last_chunk_buffer);
         result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);

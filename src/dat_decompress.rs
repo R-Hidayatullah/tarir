@@ -234,9 +234,7 @@ fn inflate_data(
 
     let mut huffmantree_builder = HuffmanTreeBuilder::default();
 
-    while (output_position < *output_data_size)
-        && state_data.input_buffer.position() != state_data.input_buffer.stream_len()?
-    {
+    while output_position < *output_data_size {
         if !parse_huffmantree(
             state_data,
             &mut huffmantree_symbol,
@@ -259,10 +257,7 @@ fn inflate_data(
         max_count = (max_count + 1) << 12;
         drop_bits(state_data, 4)?;
         let mut current_code_read_count: u32 = 0;
-        while (current_code_read_count < max_count)
-            && (output_position < *output_data_size)
-            && (state_data.input_buffer.position() != state_data.input_buffer.stream_len()?)
-        {
+        while (current_code_read_count < max_count) && (output_position < *output_data_size) {
             current_code_read_count = current_code_read_count.wrapping_add(1);
             let mut symbol_data = 0;
             read_code(&mut huffmantree_symbol, state_data, &mut symbol_data)?;
