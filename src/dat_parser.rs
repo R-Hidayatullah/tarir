@@ -90,63 +90,6 @@ pub struct DatFile {
     pub dat_file: BufReader<File>,
 }
 
-fn remove_and_print_bytes_at_intervals(data: &mut Vec<u8>, interval: u64) {
-    let mut position = interval - 4; // Start at the first position (interval - 4)
-    let mut removed_bytes = Vec::new();
-    let data_len = data.len() as u64;
-
-    // Track positions to remove
-    let mut positions_to_remove = Vec::new();
-
-    while position < data_len {
-        let start = position as usize;
-        let end = start + 4;
-
-        if end <= data.len() {
-            let mut removed = &data[start..end];
-            removed_bytes.extend_from_slice(removed);
-            let result = removed.read_u32::<LittleEndian>().unwrap();
-            // Print the removed bytes in hexadecimal format
-            println!("Removed bytes at 0x{:08X}: 0x{:X?}", position, result);
-            positions_to_remove.push(start);
-        }
-
-        // Move to the next interval
-        position += interval;
-    }
-
-    // Handle removing bytes before EOF (4 bytes before the last position)
-    if data_len > 4 {
-        let eof_position = data_len - 4;
-        let mut removed = &data[eof_position as usize..data_len as usize];
-
-        removed_bytes.extend_from_slice(removed);
-        let result = removed.read_u32::<LittleEndian>().unwrap();
-        // Print the removed bytes in hexadecimal format
-        println!("Removed bytes at 0x{:08X}: 0x{:X?}", eof_position, result);
-        positions_to_remove.push(eof_position as usize);
-    }
-
-    // Remove the bytes at the specified positions
-    let mut new_data = Vec::new();
-    let mut pos = 0;
-    while pos < data.len() {
-        if positions_to_remove.contains(&pos) {
-            // Skip the next 4 bytes
-            pos += 4;
-            continue;
-        }
-        new_data.push(data[pos]);
-        pos += 1;
-    }
-
-    // Update the original data vector
-    *data = new_data;
-
-    // Print the new buffer length
-    println!("Buffer Length: {}", data.len());
-}
-
 impl DatFile {
     /// Load a `.dat` file and parse its contents into a `DatFile` structure.
     pub fn load<P: AsRef<Path>>(file_path: P) -> std::io::Result<DatFile> {
@@ -279,17 +222,37 @@ impl DatFile {
 
         let mut buffer_data = Vec::with_capacity(buffer_size as usize);
 
+        let mut result_crc: Vec<u32> = Vec::new();
+
         #[allow(unused_assignments)]
         let mut name_file = String::new();
-        for _ in 0..buffer_size {
-            let byte = self.dat_file.read_u8()?;
-            buffer_data.push(byte);
+
+        let chunk_count = buffer_size / 0x10000;
+        let last_chunk_size = buffer_size % 0x10000;
+
+        println!(
+            "Chunk count : {} Chunk size : {}",
+            chunk_count, last_chunk_size
+        );
+        if chunk_count >= 1 {
+            for _ in 0..chunk_count {
+                for _ in 0..(0x10000 - 4) {
+                    buffer_data.push(self.dat_file.read_u8()?);
+                }
+                result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
+            }
+        }
+        for _ in 0..(last_chunk_size - 4) {
+            buffer_data.push(self.dat_file.read_u8()?);
+        }
+        result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
+
+        for crc_data in result_crc {
+            println!("CRC 32C : {:X?}", crc_data);
         }
 
-        // let mut dump_data = File::create("buffer_31.bin")?;
+        // let mut dump_data = File::create("buffer_19.bin")?;
         // dump_data.write_all(&buffer_data)?;
-
-        remove_and_print_bytes_at_intervals(&mut buffer_data, 0x10000);
 
         println!("\nBuffer Length : {}", buffer_size);
         println!("\nActual Buffer Length : {}", buffer_data.len());

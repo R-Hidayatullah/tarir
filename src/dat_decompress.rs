@@ -75,27 +75,6 @@ fn pull_byte(
     bytes_available_data: &mut u8,
 ) -> std::io::Result<()> {
     if state_data.bytes_available >= std::mem::size_of::<u32>() as u32 {
-        if state_data.skipped_bytes != 0 {
-            if ((state_data.input_buffer.position() + 4) % state_data.skipped_bytes as u64) == 0
-            // || ((state_data.input_buffer.position() + 4)
-            //     == state_data.input_buffer.stream_len()?)
-            {
-                println!("Buffer position : {}", state_data.input_buffer.position());
-                state_data.bytes_available =
-                    state_data.bytes_available - std::mem::size_of::<u32>() as u32;
-                let unknown_data = state_data.input_buffer.read_u32::<LittleEndian>()?; // Skipping 4 bytes, for CRC probably
-                // let unknown_data: u32 = read_bits(state_data, 32)?;
-
-                // state_data.buffer_position =
-                //     state_data.input_buffer.position() + std::mem::size_of::<u32>() as u64;
-                state_data.buffer_position = state_data.input_buffer.position();
-                println!(
-                    "Unknown data : {:X?} in position : {}",
-                    unknown_data,
-                    state_data.input_buffer.position()
-                );
-            }
-        }
         *head_data = state_data.input_buffer.read_u32::<LittleEndian>()?;
         state_data.bytes_available -= std::mem::size_of::<u32>() as u32;
         state_data.buffer_position = state_data.input_buffer.position();
@@ -109,7 +88,10 @@ fn pull_byte(
 
 fn read_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<u32> {
     if state_data.bytes_available_data < bits_number {
-        println!("Not enough bits available to read the value.");
+        println!(
+            "Not enough bits available to read the value. in position : {}",
+            state_data.input_buffer.position()
+        );
     }
     Ok(state_data.head_data >> (std::mem::size_of::<u32>() as u8 * 8) - bits_number)
 }
@@ -252,7 +234,9 @@ fn inflate_data(
 
     let mut huffmantree_builder = HuffmanTreeBuilder::default();
 
-    while output_position < *output_data_size {
+    while (output_position < *output_data_size)
+        && state_data.input_buffer.position() != state_data.input_buffer.stream_len()?
+    {
         if !parse_huffmantree(
             state_data,
             &mut huffmantree_symbol,
@@ -270,14 +254,15 @@ fn inflate_data(
 
         #[allow(unused_assignments)]
         let mut max_count: u32 = 0;
-        let _buff_pos = state_data.input_buffer.position();
-
         max_count = read_bits(state_data, 4)?;
 
         max_count = (max_count + 1) << 12;
         drop_bits(state_data, 4)?;
         let mut current_code_read_count: u32 = 0;
-        while (current_code_read_count < max_count) && (output_position < *output_data_size) {
+        while (current_code_read_count < max_count)
+            && (output_position < *output_data_size)
+            && (state_data.input_buffer.position() != state_data.input_buffer.stream_len()?)
+        {
             current_code_read_count = current_code_read_count.wrapping_add(1);
             let mut symbol_data = 0;
             read_code(&mut huffmantree_symbol, state_data, &mut symbol_data)?;
