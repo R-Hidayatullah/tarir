@@ -28,7 +28,7 @@ fn main() -> io::Result<()> {
         "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
     // let default_file_path = "Local.dat";
 
-    let default_index_number = 17;
+    let default_index_number = 16;
 
     // Parse command line arguments
     let file_path = if args.len() > 1 {
