@@ -130,7 +130,10 @@ fn pull_byte(
 
 fn read_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<u32> {
     if state_data.bytes_available_data < bits_number {
-        println!("Not enough bits available to read the value.");
+        println!(
+            "Not enough bits available to read the value. in position : {}",
+            state_data.input_buffer.position()
+        );
     }
     Ok(state_data.head_data >> (std::mem::size_of::<u32>() as u8 * 8) - bits_number)
 }
@@ -279,6 +282,7 @@ pub fn inflate_texture_file_buffer(
         &full_format_data,
         &mut texture_output_size,
         output_data,
+        &mut texture_huffmantree_dict,
     )?;
 
     Ok(())
@@ -289,40 +293,93 @@ fn inflate_texture_data(
     fullformat_data: &FullFormat,
     texture_output_data_size: &mut u32,
     output_data: &mut Vec<u8>,
+    texture_huffmantree_dict: &mut HuffmanTree,
 ) -> std::io::Result<()> {
     let mut color_bitmap_data: Vec<bool> = Vec::new();
     let mut alpha_bitmap_data: Vec<bool> = Vec::new();
-    let mut data_size: u32 = 0;
+    color_bitmap_data.reserve(fullformat_data.pixel_blocks as usize);
+    alpha_bitmap_data.reserve(fullformat_data.pixel_blocks as usize);
 
+    let mut data_size: u32 = 0;
     data_size = read_bits(state_data, 32)?;
     drop_bits(state_data, 32)?;
-
+    println!("Data size : {}", data_size);
     let mut compression_flag_data: u32 = 0;
     compression_flag_data = read_bits(state_data, 32)?;
     drop_bits(state_data, 32)?;
+    println!("Compression flags : {}", compression_flag_data);
 
+    println!(
+        "full_format_data.pixel_blocks : {}",
+        fullformat_data.pixel_blocks
+    );
     color_bitmap_data.resize(fullformat_data.pixel_blocks as usize, false);
     alpha_bitmap_data.resize(fullformat_data.pixel_blocks as usize, false);
 
-    // println!(
-    //     "Checking CfDecodeWhiteColor: {}",
-    //     12 & CompressionFlags::CfDecodeWhiteColor as i32
-    // );
-    // println!(
-    //     "Checking CfDecodeConstantAlphaFrom4bits: {}",
-    //     12 & CompressionFlags::CfDecodeConstantAlphaFrom4bits as i32
-    // );
-    // println!(
-    //     "Checking CfDecodeConstantAlphaFrom8bits: {}",
-    //     12 & CompressionFlags::CfDecodeConstantAlphaFrom8bits as i32
-    // );
-    // println!(
-    //     "Checking CfDecodePlainColor: {}",
-    //     12 & CompressionFlags::CfDecodePlainColor as i32
-    // );
+    if (compression_flag_data & CompressionFlags::CfDecodeWhiteColor as u32) != 0 {
+        println!(
+            "Checking CfDecodeWhiteColor: {}",
+            12 & CompressionFlags::CfDecodeWhiteColor as i32
+        );
+        decode_white_color(
+            state_data,
+            texture_huffmantree_dict,
+            &mut alpha_bitmap_data,
+            &mut color_bitmap_data,
+            fullformat_data,
+            output_data,
+        )?;
+    }
+
+    if (compression_flag_data & CompressionFlags::CfDecodeConstantAlphaFrom4bits as u32) != 0 {
+        println!(
+            "Checking CfDecodeConstantAlphaFrom4bits: {}",
+            12 & CompressionFlags::CfDecodeConstantAlphaFrom4bits as i32
+        );
+        decode_constant_alpha_from_4_bits(
+            state_data,
+            texture_huffmantree_dict,
+            &mut alpha_bitmap_data,
+            fullformat_data,
+            output_data,
+        )?;
+    }
+
+    if (compression_flag_data & CompressionFlags::CfDecodeConstantAlphaFrom8bits as u32) != 0 {
+        println!(
+            "Checking CfDecodeConstantAlphaFrom8bits: {}",
+            12 & CompressionFlags::CfDecodeConstantAlphaFrom8bits as i32
+        );
+        decode_constant_alpha_from_8_bits(
+            state_data,
+            texture_huffmantree_dict,
+            &mut alpha_bitmap_data,
+            fullformat_data,
+            output_data,
+        )?;
+    }
+
+    if (compression_flag_data & CompressionFlags::CfDecodePlainColor as u32) != 0 {
+        println!(
+            "Checking CfDecodePlainColor: {}",
+            12 & CompressionFlags::CfDecodePlainColor as i32
+        );
+        decode_plain_color(
+            state_data,
+            texture_huffmantree_dict,
+            &mut color_bitmap_data,
+            fullformat_data,
+            output_data,
+        )?;
+    }
 
     let mut loop_index_data: u32 = 0;
-    if state_data.bytes_available_data >= 32 {}
+    if state_data.bytes_available_data >= 32 {
+        state_data
+            .input_buffer
+            .seek(std::io::SeekFrom::Current(-1))?;
+        state_data.buffer_position = state_data.input_buffer.position();
+    }
 
     Ok(())
 }
@@ -379,9 +436,7 @@ fn initialize_static_values(
     });
     // Number 6 format data
     format_data.push(Format {
-        flag_data: FormatFlags::FfColor as u16
-            | FormatFlags::FfAlpha as u16
-            | FormatFlags::FfPlaincomp as u16,
+        flag_data: FormatFlags::FfAlpha as u16 | FormatFlags::FfPlaincomp as u16,
         pixel_size_bits: 4,
     });
     // Number 7 format data
@@ -478,8 +533,16 @@ fn decode_constant_alpha_from_4_bits(
         while temp_code > 0 {
             if !alpha_bitmap[pixel_block_position as usize] {
                 if value_data != 0 {
+                    let destination = &mut output_data[fullformat_data.bytes_pixel_blocks
+                        as usize
+                        * pixel_block_position as usize..];
+                    let source = if exist != 0 { &alpha_value } else { &zero_data };
+
+                    destination[0..fullformat_data.bytes_component as usize].copy_from_slice(
+                        &source.to_le_bytes()[..fullformat_data.bytes_component as usize],
+                    );
+
                     alpha_bitmap[pixel_block_position as usize] = true;
-                    unimplemented!("copying data!");
                 }
                 temp_code = temp_code.wrapping_sub(1);
             }
@@ -526,8 +589,15 @@ fn decode_constant_alpha_from_8_bits(
         while temp_code > 0 {
             if !alpha_bitmap[pixel_block_position as usize] {
                 if value_data != 0 {
+                    let destination = &mut output_data[fullformat_data.bytes_pixel_blocks
+                        as usize
+                        * pixel_block_position as usize..];
+                    let source = if exist != 0 { &alpha_value } else { &zero_data };
+
+                    destination[0..fullformat_data.bytes_component as usize].copy_from_slice(
+                        &source.to_le_bytes()[..fullformat_data.bytes_component as usize],
+                    );
                     alpha_bitmap[pixel_block_position as usize] = true;
-                    unimplemented!("copying data!");
                 }
                 temp_code = temp_code.wrapping_sub(1);
             }
@@ -561,6 +631,197 @@ fn decode_plain_color(
     let mut red_data: u16 = 0;
     red_data = read_bits(state_data, 8)? as u16;
     drop_bits(state_data, 8)?;
+    let mut temp_red_data_1: u8 = 0;
+    let mut temp_blue_data_1: u8 = 0;
+    let mut temp_green_data_1: u16 = 0;
+
+    temp_red_data_1 = ((red_data - (red_data >> 5)) >> 3) as u8;
+    temp_blue_data_1 = ((blue_data - (blue_data >> 5)) >> 3) as u8;
+    temp_green_data_1 = (green_data - (green_data >> 6)) >> 2;
+
+    let mut temp_red_data_2: u8 = 0;
+    let mut temp_blue_data_2: u8 = 0;
+    let mut temp_green_data_2: u16 = 0;
+
+    temp_red_data_2 = (temp_red_data_1 << 3) + (temp_red_data_1 >> 2);
+    temp_blue_data_2 = (temp_blue_data_1 << 3) + (temp_blue_data_1 >> 2);
+    temp_green_data_2 = (temp_green_data_1 << 2) + (temp_green_data_1 >> 4);
+
+    let mut comparison_red: u32 = 0;
+    let mut comparison_blue: u32 = 0;
+    let mut comparison_green: u32 = 0;
+    unimplemented!();
+    // comparison_red = 12 * (red_data - temp_red_data_2) / (8 - ((temp_red_data_1 & 0x11) == 0x11 ? 1 : 0));
+    // comparison_blue = 12 * (blue_data - temp_blue_data_2) / (8 - ((temp_blue_data_1 & 0x11) == 0x11 ? 1 : 0));
+    // comparison_green = 12 * (green_data - temp_green_data_2) / (8 - ((temp_green_data_1 & 0x1111) == 0x1111 ? 1 : 0));
+
+    let mut value_red_1: u32 = 0;
+    let mut value_red_2: u32 = 0;
+
+    if (comparison_red < 2) {
+        value_red_1 = temp_red_data_1 as u32;
+        value_red_2 = temp_red_data_1 as u32;
+    } else if (comparison_red < 6) {
+        value_red_1 = temp_red_data_1 as u32;
+        value_red_2 = temp_red_data_1 as u32 + 1;
+    } else if (comparison_red < 10) {
+        value_red_1 = temp_red_data_1 as u32 + 1;
+        value_red_2 = temp_red_data_1 as u32;
+    } else {
+        value_red_1 = temp_red_data_1 as u32 + 1;
+        value_red_2 = temp_red_data_1 as u32 + 1;
+    }
+
+    let mut value_blue_1: u32 = 0;
+    let mut value_blue_2: u32 = 0;
+
+    if (comparison_blue < 2) {
+        value_blue_1 = temp_blue_data_1 as u32;
+        value_blue_2 = temp_blue_data_1 as u32;
+    } else if (comparison_blue < 6) {
+        value_blue_1 = temp_blue_data_1 as u32;
+        value_blue_2 = temp_blue_data_1 as u32 + 1;
+    } else if (comparison_blue < 10) {
+        value_blue_1 = temp_blue_data_1 as u32 + 1;
+        value_blue_2 = temp_blue_data_1 as u32;
+    } else {
+        value_blue_1 = temp_blue_data_1 as u32 + 1;
+        value_blue_2 = temp_blue_data_1 as u32 + 1;
+    }
+
+    let mut value_green_1: u32 = 0;
+    let mut value_green_2: u32 = 0;
+
+    if (comparison_green < 2) {
+        value_green_1 = temp_green_data_1 as u32;
+        value_green_2 = temp_green_data_1 as u32;
+    } else if (comparison_green < 6) {
+        value_green_1 = temp_green_data_1 as u32;
+        value_green_2 = temp_green_data_1 as u32 + 1;
+    } else if (comparison_green < 10) {
+        value_green_1 = temp_green_data_1 as u32 + 1;
+        value_green_2 = temp_green_data_1 as u32;
+    } else {
+        value_green_1 = temp_green_data_1 as u32 + 1;
+        value_green_2 = temp_green_data_1 as u32 + 1;
+    }
+
+    let mut value_color_1: u32 = 0;
+    let mut value_color_2: u32 = 0;
+
+    value_color_1 = value_red_1 | ((value_green_1 | (value_blue_1 << 6)) << 5);
+    value_color_2 = value_red_2 | ((value_green_2 | (value_blue_2 << 6)) << 5);
+
+    let mut temp_value_1: u32 = 0;
+    let mut temp_value_2: u32 = 0;
+
+    if (value_red_1 != value_red_2) {
+        if (value_red_1 == temp_red_data_1 as u32) {
+            temp_value_1 += comparison_red;
+        } else {
+            temp_value_1 += (12 - comparison_red);
+        }
+        temp_value_2 += 1;
+    }
+
+    if (value_blue_1 != value_blue_2) {
+        if (value_blue_1 == temp_blue_data_1 as u32) {
+            temp_value_1 += comparison_blue;
+        } else {
+            temp_value_1 += (12 - comparison_blue);
+        }
+        temp_value_2 += 1;
+    }
+
+    if (value_green_1 != value_green_2) {
+        if (value_green_1 == temp_green_data_1 as u32) {
+            temp_value_1 += comparison_green;
+        } else {
+            temp_value_1 += (12 - comparison_green);
+        }
+        temp_value_2 += 1;
+    }
+
+    if (temp_value_2 > 0) {
+        temp_value_1 = (temp_value_1 + (temp_value_2 / 2)) / temp_value_2;
+    }
+
+    let mut special_case_dxt1 = false;
+    special_case_dxt1 =
+        ((fullformat_data.format.flag_data & FormatFlags::FfDeducedalphacomp as u16) != 0)
+            && (temp_value_1 == 5 || temp_value_1 == 6 || temp_value_2 != 0);
+
+    if (temp_value_2 > 0 && !special_case_dxt1) {
+        if (value_color_2 == 0xFFFF) {
+            temp_value_1 = 12;
+            value_color_1 = value_color_1.wrapping_sub(1);
+        } else {
+            temp_value_1 = 0;
+            value_color_2 = value_color_2.wrapping_add(1);
+        }
+    }
+
+    if value_color_2 >= value_color_1 {
+        let mut swap_temp: u32 = 0;
+        swap_temp = value_color_1;
+        value_color_1 = value_color_2;
+        value_color_2 = swap_temp;
+
+        temp_value_1 = temp_value_1.wrapping_sub(1);
+    }
+    let mut color_selected: u32 = 0;
+
+    if (special_case_dxt1) {
+        color_selected = 2;
+    } else {
+        if (temp_value_1 < 2) {
+            color_selected = 0;
+        } else if (temp_value_1 < 6) {
+            color_selected = 2;
+        } else if (temp_value_1 < 10) {
+            color_selected = 3;
+        } else {
+            color_selected = 1;
+        }
+    }
+
+    let mut temp_value: u64 = 0;
+
+    temp_value = color_selected as u64
+        | (color_selected.wrapping_shl(2) as u64)
+        | ((color_selected as u64 | (color_selected.wrapping_shl(2) as u64)) << 4);
+
+    temp_value = temp_value | (temp_value.wrapping_shl(8));
+    temp_value = temp_value | (temp_value.wrapping_shl(16));
+    let mut final_value: u64 = 0;
+    final_value = value_color_1 as u64
+        | (value_color_2.wrapping_shl(16) as u64)
+        | (temp_value.wrapping_shl(32) as u64);
+    let mut pixel_block_position: u32 = 0;
+
+    while pixel_block_position < fullformat_data.pixel_blocks {
+        let mut temp_code: u16 = 0;
+        read_code(texture_huffmantree_dict, state_data, &mut temp_code)?;
+        let mut value_data: u32 = 0;
+        value_data = read_bits(state_data, 1)?;
+        drop_bits(state_data, 1)?;
+
+        while temp_code > 0 {
+            if !color_bitmap[pixel_block_position as usize] {
+                if value_data != 0 {
+                    color_bitmap[pixel_block_position as usize] = true;
+                    unimplemented!()
+                }
+                temp_code = temp_code.wrapping_sub(1);
+            }
+            pixel_block_position = pixel_block_position.wrapping_add(1);
+        }
+        while pixel_block_position < fullformat_data.pixel_blocks
+            && color_bitmap[pixel_block_position as usize]
+        {
+            pixel_block_position = pixel_block_position.wrapping_add(1);
+        }
+    }
 
     Ok(())
 }

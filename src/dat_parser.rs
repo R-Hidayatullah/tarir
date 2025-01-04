@@ -274,16 +274,16 @@ impl DatFile {
                 &mut output_data,
             )?;
 
-            // let mut texture_output_data_size: u32 = 0;
-            // let mut texture_output_data: Vec<u8> = Vec::new();
+            let mut texture_output_data_size: u32 = 0;
+            let mut texture_output_data: Vec<u8> = Vec::new();
 
-            // texture_decompress::inflate_texture_file_buffer(
-            //     output_data.clone(),
-            //     &mut texture_output_data_size,
-            //     &mut texture_output_data,
-            // )?;
+            texture_decompress::inflate_texture_file_buffer(
+                output_data.clone(),
+                &mut texture_output_data_size,
+                &mut texture_output_data,
+            )?;
 
-            // println!("Texture output data size : {}", texture_output_data_size);
+            println!("Texture output data size : {}", texture_output_data_size);
             println!("\nBuffer Length : {}", output_data.len());
 
             self.hex_dump(&output_data);

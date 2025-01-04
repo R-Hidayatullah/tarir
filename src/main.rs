@@ -13,6 +13,7 @@ use std::io::Write;
 use dat_parser::ArchiveId;
 use image::ImageFormat;
 use image::load_from_memory;
+use image::load_from_memory_with_format;
 
 mod dat_decompress;
 mod dat_parser;
@@ -24,11 +25,11 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     // Default values
-    // let default_file_path =
-    //     "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
-    let default_file_path = "Local.dat";
+    let default_file_path =
+        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
+    // let default_file_path = "Local.dat";
 
-    let default_index_number = 19;
+    let default_index_number = 648198;
 
     // Parse command line arguments
     let file_path = if args.len() > 1 {
@@ -50,12 +51,13 @@ fn main() -> io::Result<()> {
     println!("Size mft index : {}", dat_file.mft_index_data.len());
     // Extract MFT data with the provided or default index number
     let (result, name_file) =
-        dat_file.extract_mft_data(ArchiveId::FileId, index_number as usize)?;
+        dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize)?;
 
-    // let mut dump_data = File::create("buffer_19_v2.bin")?;
+    // let mut dump_data = File::create(format!("{}_v2.bin", default_index_number).to_string())?;
     // dump_data.write_all(&result)?;
 
-    // save_image(result, name_file.as_str());
+    // save_image(result, format!("{}", default_index_number).as_str());
+
     // let file_path = "buffer_31_first_chunk.bin"; // Path to your binary file
     // match compute_crc32c_from_file(file_path) {
     //     //should be A9C0541F
@@ -71,16 +73,15 @@ fn main() -> io::Result<()> {
 }
 
 fn save_image(vec_data: Vec<u8>, custom_name: &str) {
-    // Try to load the image from the byte vector
-    if let Ok(img) = load_from_memory(&vec_data) {
-        // Save the image as PNG
-        if let Ok(file) = File::create(format!("{}.png", custom_name)) {
-            let ref mut writer = BufWriter::new(file);
+    println!("Load data with name : {}", custom_name);
 
-            let _ = img.write_to(writer, ImageFormat::Png);
-            println!("Image saved as : {}.png", custom_name);
-        }
-    }
+    let image_data = load_from_memory(&vec_data).unwrap();
+    let mut file_data = File::create(format!("img_{}.png", custom_name)).unwrap();
+
+    image_data
+        .write_to(&mut file_data, ImageFormat::Png)
+        .unwrap();
+    println!("Image saved as : {}.png", custom_name);
 }
 
 fn compute_crc32c_from_file(file_path: &str) -> io::Result<u32> {
