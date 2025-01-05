@@ -253,6 +253,7 @@ impl DatFile {
             "Chunk count : {} Chunk size : {}",
             chunk_count, last_chunk_size
         );
+
         if chunk_count >= 1 {
             for _ in 0..chunk_count {
                 let mut chunk_buffer: Vec<u8> = Vec::with_capacity(0x10000 - 4);

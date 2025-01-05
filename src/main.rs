@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io;
 use std::io::BufReader;
 use std::io::Read;
+use std::io::Write;
 
 use dat_parser::ArchiveId;
 use image::ImageFormat;
@@ -25,7 +26,7 @@ fn main() -> io::Result<()> {
     //     "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
     let default_file_path = "Local.dat";
 
-    let default_index_number = 17;
+    let default_index_number = 32;
 
     // Parse command line arguments
     let file_path = if args.len() > 1 {
@@ -51,7 +52,7 @@ fn main() -> io::Result<()> {
     let (result, name_file) =
         dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize)?;
 
-    // let mut dump_data = File::create(format!("{}_v2.bin", default_index_number).to_string())?;
+    // let mut dump_data = File::create(format!("{}.bin", default_index_number).to_string())?;
     // dump_data.write_all(&result)?;
 
     // save_image(result, format!("{}", default_index_number).as_str());

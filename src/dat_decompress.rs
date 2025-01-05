@@ -87,13 +87,23 @@ fn pull_byte(
 }
 
 fn read_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<u32> {
+    // Extract the available bits
+    let mut value = state_data.head_data >> (std::mem::size_of::<u32>() as u8 * 8 - bits_number);
+
     if state_data.bytes_available_data < bits_number {
         println!(
-            "Not enough bits available to read the value. in position : {}",
+            "Not enough bits available to read the value. In position: {}",
             state_data.input_buffer.position()
         );
+
+        // If the number of bits is less than 32, pad with zeros
+        if bits_number < 32 {
+            let padding_bits = 32 - bits_number;
+            value <<= padding_bits; // Shift the value to the left, adding zeros
+        }
     }
-    Ok(state_data.head_data >> (std::mem::size_of::<u32>() as u8 * 8) - bits_number)
+
+    Ok(value)
 }
 
 fn drop_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<()> {
@@ -218,8 +228,8 @@ fn inflate_data(
 ) -> std::io::Result<()> {
     let mut output_position: u32 = 0;
     #[allow(unused_assignments)]
-    let mut write_size_const_addition: u16 = 3;
-
+    let mut write_size_const_addition: u16 = 0;
+    let mut max_size_count: u32 = 0;
     drop_bits(state_data, 4)?;
     write_size_const_addition = read_bits(state_data, 4)? as u16;
     write_size_const_addition += 1;
@@ -254,8 +264,8 @@ fn inflate_data(
         let mut max_count: u32 = 0;
         max_count = read_bits(state_data, 4)?;
         max_count = (max_count + 1) << 12;
-
-        drop_bits(state_data, 4)?;
+        max_size_count = max_size_count + 1;
+        drop_bits(state_data, 4)?; // Because this dropping using half byte make the read bits not enough data
 
         let mut current_code_read_count: u32 = 0;
         while (current_code_read_count < max_count) && (output_position < *output_data_size) {
@@ -335,6 +345,12 @@ fn inflate_data(
             }
         }
     }
+    println!(
+        "Max size count : {}, read bits : {}, read bytes : {} ",
+        max_size_count,
+        max_size_count * 4,
+        (max_size_count * 4) / 8
+    );
     Ok(())
 }
 
@@ -623,10 +639,6 @@ fn add_symbol(
     symbol_data: u16,
     bit_data: u8,
 ) -> std::io::Result<()> {
-    if symbol_data == 12842 {
-        println!("Symbol data : {} Bit data : {}", symbol_data, bit_data);
-    }
-
     if huffmantree_builder.bits_head_exist[bit_data as usize] {
         huffmantree_builder.bits_body[symbol_data as usize] =
             huffmantree_builder.bits_head[bit_data as usize];
