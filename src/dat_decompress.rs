@@ -17,7 +17,8 @@ const BYTES_TO_REMOVE: usize = 4; // sizeof(u32)
 #[derive(Debug, Default)]
 struct StateData {
     input_buffer: Cursor<Vec<u8>>,
-    buffer_position: u64,
+    buffer_position_bytes: u64,
+    buffer_position_bit: u64,
     bytes_available: u32,
     skipped_bytes: u32,
     head_data: u32,
@@ -77,7 +78,8 @@ fn pull_byte(
     if state_data.bytes_available >= std::mem::size_of::<u32>() as u32 {
         *head_data = state_data.input_buffer.read_u32::<LittleEndian>()?;
         state_data.bytes_available -= std::mem::size_of::<u32>() as u32;
-        state_data.buffer_position = state_data.input_buffer.position();
+        state_data.buffer_position_bytes = state_data.input_buffer.position();
+        state_data.buffer_position_bit = state_data.buffer_position_bit + 32;
         *bytes_available_data = (std::mem::size_of::<u32>() as u32 * 8) as u8;
     } else {
         *head_data = 0;
@@ -112,6 +114,7 @@ fn drop_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<()>
     }
     #[allow(unused_assignments)]
     let mut new_bits_available: u8 = 0;
+    state_data.buffer_position_bit = state_data.buffer_position_bit + bits_number as u64;
     new_bits_available = state_data.bytes_available_data.wrapping_sub(bits_number);
     if new_bits_available >= std::mem::size_of::<u32>() as u8 * 8 {
         if bits_number == std::mem::size_of::<u32>() as u8 * 8 {
@@ -350,6 +353,16 @@ fn inflate_data(
         max_size_count,
         max_size_count * 4,
         (max_size_count * 4) / 8
+    );
+    println!(
+        "Buffer bits position : {}, Buffer bits size left before EOF : {},",
+        state_data.buffer_position_bit,
+        if (state_data.input_buffer.stream_len()? * 16) > state_data.buffer_position_bit {
+            (state_data.input_buffer.stream_len()? * 16)
+                .wrapping_sub(state_data.buffer_position_bit)
+        } else {
+            0
+        }
     );
     Ok(())
 }
