@@ -3,9 +3,10 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, Write};
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 
-use crate::{dat_decompress, texture_decompress};
+use crate::dat_decompress;
 
 /// The length of the DAT file identifier, typically "AN(" in ASCII.
 const DAT_MAGIC_NUMBER: usize = 3;
@@ -71,6 +72,12 @@ pub struct MftData {
     pub counter: u32,
     /// CRC (Cyclic Redundancy Check) for verifying the integrity of this entry.
     pub crc: u32,
+
+    /// Customized data, is not part of the game real data
+    /// Skipped when parsing data first time, becaus its take long time
+    pub uncompressed_size: u32,
+    /// u64 for position crc_32c data begin, the other one is the data itself 4 of u8 data in u32
+    pub crc_32c_data: Vec<(u64, u32)>,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +90,8 @@ pub struct MftIndexData {
 
 #[derive(Debug)]
 pub struct DatFile {
+    pub filename: String,
+    pub file_size: u64,
     pub dat_header: DatHeader,
     pub mft_header: MftHeader,
     pub mft_data: Vec<MftData>,
@@ -94,19 +103,22 @@ impl DatFile {
     /// Load a `.dat` file and parse its contents into a `DatFile` structure.
     pub fn load<P: AsRef<Path>>(file_path: P) -> std::io::Result<DatFile> {
         // Check if the file extension is '.dat'
-        let file_path_str = file_path.as_ref().to_str().unwrap_or("");
-        if !file_path_str.to_lowercase().ends_with(".dat") {
+        let file_path_str = file_path.as_ref().to_str().unwrap_or("").to_string();
+        if !&file_path_str.to_lowercase().ends_with(".dat") {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid file extension. Expected '.dat'.",
             ));
         }
 
+        let file_path_data = file_path_str.clone();
         // Open the file and create a buffered reader.
         let file = File::open(file_path)?;
 
         // Initialize the DatFile structure with default values.
-        let mut dat_file = DatFile {
+        let mut data_dat_file = DatFile {
+            filename: String::new(),
+            file_size: 0,
             dat_header: Default::default(),
             mft_header: Default::default(),
             mft_data: Default::default(),
@@ -114,13 +126,16 @@ impl DatFile {
             dat_file: BufReader::new(file),
         };
 
-        // Read and parse the headers and data.
-        dat_file.read_dat_header()?;
-        dat_file.read_mft_header()?;
-        dat_file.read_mft_data()?;
-        dat_file.read_mft_index_data()?;
+        data_dat_file.filename = file_path_data;
+        data_dat_file.file_size = data_dat_file.dat_file.stream_len()?;
 
-        Ok(dat_file)
+        // Read and parse the headers and data.
+        data_dat_file.read_dat_header()?;
+        data_dat_file.read_mft_header()?;
+        data_dat_file.read_mft_data()?;
+        data_dat_file.read_mft_index_data()?;
+
+        Ok(data_dat_file)
     }
 
     /// Read and parse the DAT file header.
@@ -168,6 +183,8 @@ impl DatFile {
                 entry_flag,
                 counter,
                 crc,
+                uncompressed_size: Default::default(),
+                crc_32c_data: Default::default(),
             });
         }
         Ok(())
@@ -189,6 +206,7 @@ impl DatFile {
         }
         Ok(())
     }
+
     pub fn extract_mft_data(
         &mut self,
         archive_id: ArchiveId,
@@ -216,6 +234,7 @@ impl DatFile {
         }
         let mft_entry = self.mft_data.get(index_found).unwrap();
         println!("Inside : {:#?}", mft_entry);
+        println!("MFT Chunk CRC 32C : {:08X?}", mft_entry.crc);
         let buffer_size = self.mft_data.get(index_found).unwrap().size;
         self.dat_file
             .seek(std::io::SeekFrom::Start(mft_entry.offset))?;
@@ -251,7 +270,7 @@ impl DatFile {
         result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
 
         for crc_data in result_crc {
-            println!("CRC 32C : {:X?}", crc_data);
+            println!("CRC 32C : {:08X?}", crc_data);
         }
 
         // let mut dump_data = File::create("buffer_19.bin")?;
@@ -274,16 +293,16 @@ impl DatFile {
                 &mut output_data,
             )?;
 
-            let mut texture_output_data_size: u32 = 0;
-            let mut texture_output_data: Vec<u8> = Vec::new();
+            // let mut texture_output_data_size: u32 = 0;
+            // let mut texture_output_data: Vec<u8> = Vec::new();
 
-            texture_decompress::inflate_texture_file_buffer(
-                output_data.clone(),
-                &mut texture_output_data_size,
-                &mut texture_output_data,
-            )?;
+            // texture_decompress::inflate_texture_file_buffer(
+            //     output_data.clone(),
+            //     &mut texture_output_data_size,
+            //     &mut texture_output_data,
+            // )?;
 
-            println!("Texture output data size : {}", texture_output_data_size);
+            // println!("Texture output data size : {}", texture_output_data_size);
             println!("\nBuffer Length : {}", output_data.len());
 
             self.hex_dump(&output_data);

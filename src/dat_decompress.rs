@@ -218,7 +218,7 @@ fn inflate_data(
 ) -> std::io::Result<()> {
     let mut output_position: u32 = 0;
     #[allow(unused_assignments)]
-    let mut write_size_const_addition: u16 = 0;
+    let mut write_size_const_addition: u16 = 3;
 
     drop_bits(state_data, 4)?;
     write_size_const_addition = read_bits(state_data, 4)? as u16;
@@ -253,9 +253,10 @@ fn inflate_data(
         #[allow(unused_assignments)]
         let mut max_count: u32 = 0;
         max_count = read_bits(state_data, 4)?;
-
         max_count = (max_count + 1) << 12;
+
         drop_bits(state_data, 4)?;
+
         let mut current_code_read_count: u32 = 0;
         while (current_code_read_count < max_count) && (output_position < *output_data_size) {
             current_code_read_count = current_code_read_count.wrapping_add(1);
