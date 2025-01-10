@@ -1,8 +1,6 @@
 #![feature(seek_stream_len)]
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
-use image::ImageFormat;
-use std::io::{self, Cursor};
 use std::sync::Mutex;
 use tera::{Context, Tera};
 
@@ -18,7 +16,7 @@ struct AppState {
 }
 
 #[actix_web::main]
-async fn main() -> io::Result<()> {
+async fn main() -> std::io::Result<()> {
     let file_path = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
     let server_address = "127.0.0.1:8080";
 
@@ -319,56 +317,6 @@ async fn download_decompressed_data_file_id(
     }
 }
 
-fn is_png(data: &[u8]) -> bool {
-    data.starts_with(b"\x89PNG")
-}
-
-fn is_jpeg(data: &[u8]) -> bool {
-    data.starts_with(b"\xff\xd8") && data.ends_with(b"\xff\xd9")
-}
-
-fn is_riff(data: &[u8]) -> bool {
-    data.starts_with(b"RIFF")
-}
-
-fn is_dds(data: &[u8]) -> bool {
-    data.starts_with(b"DDS ")
-}
-
-fn is_tga(data: &[u8]) -> bool {
-    data.starts_with(b"TRUEVISION-XFILE")
-}
-
-fn detect_image_format(data: &[u8]) -> Option<&'static str> {
-    if is_png(data) {
-        Some("image/png")
-    } else if is_jpeg(data) {
-        Some("image/jpeg")
-    } else if is_riff(data) {
-        Some("image/riff") // Example format, might need further processing
-    } else if is_dds(data) {
-        Some("image/dds") // Example format, might need further processing
-    } else if is_tga(data) {
-        Some("image/tga") // Example format, might need further processing
-    } else {
-        None
-    }
-}
-
-fn convert_to_png(data: &[u8]) -> Result<Vec<u8>, String> {
-    let image = match image::load_from_memory(data) {
-        Ok(img) => img,
-        Err(e) => return Err(format!("Error loading image: {}", e)),
-    };
-
-    let mut png_data = Vec::new();
-    if let Err(e) = image.write_to(&mut Cursor::new(&mut png_data), ImageFormat::Png) {
-        return Err(format!("Error converting to PNG: {}", e));
-    }
-
-    Ok(png_data)
-}
-
 async fn convert_to_image_base_id(
     data: web::Data<AppState>,
     path: web::Path<u32>,
@@ -379,34 +327,13 @@ async fn convert_to_image_base_id(
     if let Some(dat_file) = dat_file.as_mut() {
         match dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize) {
             Ok((_, decompressed_data)) => {
-                // Check if the decompressed data is a valid image format
-                if let Some(content_type) = detect_image_format(&decompressed_data) {
-                    let final_data = if content_type != "image/jpeg" {
-                        match convert_to_png(&decompressed_data) {
-                            Ok(png_data) => png_data,
-                            Err(err) => {
-                                return HttpResponse::InternalServerError()
-                                    .body(format!("Conversion error: {}", err));
-                            }
-                        }
-                    } else {
-                        decompressed_data
-                    };
-
-                    // Return the decompressed data as an image (PNG if converted)
+                if let Some(image_type) = detect_image_format(&decompressed_data) {
                     HttpResponse::Ok()
-                        .content_type("image/png")
-                        .insert_header((
-                            "Content-Disposition",
-                            format!(
-                                "attachment; filename=decompressed_base_id_{}.png",
-                                index_number
-                            ),
-                        ))
-                        .body(final_data)
+                        .content_type(image_type)
+                        .body(decompressed_data)
                 } else {
-                    HttpResponse::BadRequest()
-                        .body("Decompressed data is not a valid image format.")
+                    HttpResponse::UnsupportedMediaType()
+                        .body("Data is not a supported image format.")
                 }
             }
             Err(err) => {
@@ -428,34 +355,13 @@ async fn convert_to_image_file_id(
     if let Some(dat_file) = dat_file.as_mut() {
         match dat_file.extract_mft_data(ArchiveId::FileId, index_number as usize) {
             Ok((_, decompressed_data)) => {
-                // Check if the decompressed data is a valid image format
-                if let Some(content_type) = detect_image_format(&decompressed_data) {
-                    let final_data = if content_type != "image/jpeg" {
-                        match convert_to_png(&decompressed_data) {
-                            Ok(png_data) => png_data,
-                            Err(err) => {
-                                return HttpResponse::InternalServerError()
-                                    .body(format!("Conversion error: {}", err));
-                            }
-                        }
-                    } else {
-                        decompressed_data
-                    };
-
-                    // Return the decompressed data as an image (PNG if converted)
+                if let Some(image_type) = detect_image_format(&decompressed_data) {
                     HttpResponse::Ok()
-                        .content_type("image/png")
-                        .insert_header((
-                            "Content-Disposition",
-                            format!(
-                                "attachment; filename=decompressed_file_id_{}.png",
-                                index_number
-                            ),
-                        ))
-                        .body(final_data)
+                        .content_type(image_type)
+                        .body(decompressed_data)
                 } else {
-                    HttpResponse::BadRequest()
-                        .body("Decompressed data is not a valid image format.")
+                    HttpResponse::UnsupportedMediaType()
+                        .body("Data is not a supported image format.")
                 }
             }
             Err(err) => {
@@ -464,5 +370,21 @@ async fn convert_to_image_file_id(
         }
     } else {
         HttpResponse::InternalServerError().body("DAT file not loaded.")
+    }
+}
+
+fn detect_image_format(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if data.starts_with(&[0x49, 0x49, 0x2A, 0x00])
+        || data.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
+        Some("image/tiff")
+    } else {
+        None
     }
 }
