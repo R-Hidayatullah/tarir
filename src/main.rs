@@ -1,7 +1,8 @@
 #![feature(seek_stream_len)]
 
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
-use std::io;
+use image::ImageFormat;
+use std::io::{self, Cursor};
 use std::sync::Mutex;
 use tera::{Context, Tera};
 
@@ -18,7 +19,7 @@ struct AppState {
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
-    let file_path = "Local.dat";
+    let file_path = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
     let server_address = "127.0.0.1:8080";
 
     // Initialize the shared state with the DAT file
@@ -38,9 +39,47 @@ async fn main() -> io::Result<()> {
     });
 
     // Start the Actix Web server
-    println!("Starting server at: {}", server_address);
+    println!("Starting server at: {}\n", server_address);
+    // Print each route's address and description
+    println!(
+        "Route: {}/ (GET) - Home page, returns the main interface of the server.",
+        server_address
+    );
+    println!(
+        "Route: {}/extract/base_id/{{index_number}} (GET) - Extracts data using the base ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/extract/file_id/{{index_number}} (GET) - Extracts data using the file ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/download/compressed/base_id/{{index_number}} (GET) - Downloads compressed data using the base ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/download/compressed/file_id/{{index_number}} (GET) - Downloads compressed data using the file ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/download/decompressed/base_id/{{index_number}} (GET) - Downloads decompressed data using the base ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/download/decompressed/file_id/{{index_number}} (GET) - Downloads decompressed data using the file ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/convert_to_image/base_id/{{index_number}} (GET) - Converts data to image using the base ID: {{index_number}}.",
+        server_address
+    );
+    println!(
+        "Route: {}/convert_to_image/file_id/{{index_number}} (GET) - Converts data to image using the file ID: {{index_number}}.",
+        server_address
+    );
+
     HttpServer::new(move || {
-        App::new()
+        let app = App::new()
             .app_data(app_state.clone())
             .route("/", web::get().to(index))
             .route(
@@ -52,13 +91,31 @@ async fn main() -> io::Result<()> {
                 web::get().to(extract_data_file_id),
             )
             .route(
-                "/download/base_id/{index_number}",
-                web::get().to(download_data_base_id),
+                "/download/compressed/base_id/{index_number}",
+                web::get().to(download_compressed_data_base_id),
             )
             .route(
-                "/download/file_id/{index_number}",
-                web::get().to(download_data_file_id),
+                "/download/compressed/file_id/{index_number}",
+                web::get().to(download_compressed_data_file_id),
             )
+            .route(
+                "/download/decompressed/base_id/{index_number}",
+                web::get().to(download_decompressed_data_base_id),
+            )
+            .route(
+                "/download/decompressed/file_id/{index_number}",
+                web::get().to(download_decompressed_data_file_id),
+            )
+            .route(
+                "/convert_to_image/base_id/{index_number}",
+                web::get().to(convert_to_image_base_id),
+            )
+            .route(
+                "/convert_to_image/file_id/{index_number}",
+                web::get().to(convert_to_image_file_id),
+            );
+
+        app
     })
     .bind(server_address)?
     .run()
@@ -95,7 +152,7 @@ async fn extract_data_base_id(data: web::Data<AppState>, path: web::Path<u32>) -
                 context.insert("raw_data_length", &raw_data.len());
                 context.insert("decompressed_data_length", &decompressed_data.len());
 
-                let rendered = data.tera.render("data_view.html", &context);
+                let rendered = data.tera.render("data_view_base_id.html", &context);
 
                 match rendered {
                     Ok(body) => HttpResponse::Ok().body(body),
@@ -131,7 +188,7 @@ async fn extract_data_file_id(data: web::Data<AppState>, path: web::Path<u32>) -
                 context.insert("raw_data_length", &raw_data.len());
                 context.insert("decompressed_data_length", &decompressed_data.len());
 
-                let rendered = data.tera.render("data_view.html", &context);
+                let rendered = data.tera.render("data_view_file_id.html", &context);
 
                 match rendered {
                     Ok(body) => HttpResponse::Ok().body(body),
@@ -150,7 +207,10 @@ async fn extract_data_file_id(data: web::Data<AppState>, path: web::Path<u32>) -
     }
 }
 
-async fn download_data_base_id(data: web::Data<AppState>, path: web::Path<u32>) -> impl Responder {
+async fn download_compressed_data_base_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
     let index_number = path.into_inner();
 
     let mut dat_file = data.dat_file.lock().unwrap();
@@ -160,7 +220,10 @@ async fn download_data_base_id(data: web::Data<AppState>, path: web::Path<u32>) 
                 .content_type("application/octet-stream")
                 .insert_header((
                     "Content-Disposition",
-                    format!("attachment; filename=base_id_{}.bin", index_number),
+                    format!(
+                        "attachment; filename=compressed_base_id_{}.bin",
+                        index_number
+                    ),
                 ))
                 .body(raw_data),
             Err(err) => {
@@ -172,7 +235,10 @@ async fn download_data_base_id(data: web::Data<AppState>, path: web::Path<u32>) 
     }
 }
 
-async fn download_data_file_id(data: web::Data<AppState>, path: web::Path<u32>) -> impl Responder {
+async fn download_compressed_data_file_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
     let index_number = path.into_inner();
 
     let mut dat_file = data.dat_file.lock().unwrap();
@@ -182,9 +248,216 @@ async fn download_data_file_id(data: web::Data<AppState>, path: web::Path<u32>) 
                 .content_type("application/octet-stream")
                 .insert_header((
                     "Content-Disposition",
-                    format!("attachment; filename=file_id_{}.bin", index_number),
+                    format!(
+                        "attachment; filename=compressed_file_id_{}.bin",
+                        index_number
+                    ),
                 ))
                 .body(raw_data),
+            Err(err) => {
+                HttpResponse::InternalServerError().body(format!("Error extracting data: {}", err))
+            }
+        }
+    } else {
+        HttpResponse::InternalServerError().body("DAT file not loaded.")
+    }
+}
+
+async fn download_decompressed_data_base_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
+    let index_number = path.into_inner();
+
+    let mut dat_file = data.dat_file.lock().unwrap();
+    if let Some(dat_file) = dat_file.as_mut() {
+        match dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize) {
+            Ok((_, decompressed_data)) => HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .insert_header((
+                    "Content-Disposition",
+                    format!(
+                        "attachment; filename=decompressed_base_id_{}.bin",
+                        index_number
+                    ),
+                ))
+                .body(decompressed_data),
+            Err(err) => {
+                HttpResponse::InternalServerError().body(format!("Error extracting data: {}", err))
+            }
+        }
+    } else {
+        HttpResponse::InternalServerError().body("DAT file not loaded.")
+    }
+}
+
+async fn download_decompressed_data_file_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
+    let index_number = path.into_inner();
+
+    let mut dat_file = data.dat_file.lock().unwrap();
+    if let Some(dat_file) = dat_file.as_mut() {
+        match dat_file.extract_mft_data(ArchiveId::FileId, index_number as usize) {
+            Ok((_, decompressed_data)) => HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .insert_header((
+                    "Content-Disposition",
+                    format!(
+                        "attachment; filename=decompressed_file_id_{}.bin",
+                        index_number
+                    ),
+                ))
+                .body(decompressed_data),
+            Err(err) => {
+                HttpResponse::InternalServerError().body(format!("Error extracting data: {}", err))
+            }
+        }
+    } else {
+        HttpResponse::InternalServerError().body("DAT file not loaded.")
+    }
+}
+
+fn is_png(data: &[u8]) -> bool {
+    data.starts_with(b"\x89PNG")
+}
+
+fn is_jpeg(data: &[u8]) -> bool {
+    data.starts_with(b"\xff\xd8") && data.ends_with(b"\xff\xd9")
+}
+
+fn is_riff(data: &[u8]) -> bool {
+    data.starts_with(b"RIFF")
+}
+
+fn is_dds(data: &[u8]) -> bool {
+    data.starts_with(b"DDS ")
+}
+
+fn is_tga(data: &[u8]) -> bool {
+    data.starts_with(b"TRUEVISION-XFILE")
+}
+
+fn detect_image_format(data: &[u8]) -> Option<&'static str> {
+    if is_png(data) {
+        Some("image/png")
+    } else if is_jpeg(data) {
+        Some("image/jpeg")
+    } else if is_riff(data) {
+        Some("image/riff") // Example format, might need further processing
+    } else if is_dds(data) {
+        Some("image/dds") // Example format, might need further processing
+    } else if is_tga(data) {
+        Some("image/tga") // Example format, might need further processing
+    } else {
+        None
+    }
+}
+
+fn convert_to_png(data: &[u8]) -> Result<Vec<u8>, String> {
+    let image = match image::load_from_memory(data) {
+        Ok(img) => img,
+        Err(e) => return Err(format!("Error loading image: {}", e)),
+    };
+
+    let mut png_data = Vec::new();
+    if let Err(e) = image.write_to(&mut Cursor::new(&mut png_data), ImageFormat::Png) {
+        return Err(format!("Error converting to PNG: {}", e));
+    }
+
+    Ok(png_data)
+}
+
+async fn convert_to_image_base_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
+    let index_number = path.into_inner();
+
+    let mut dat_file = data.dat_file.lock().unwrap();
+    if let Some(dat_file) = dat_file.as_mut() {
+        match dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize) {
+            Ok((_, decompressed_data)) => {
+                // Check if the decompressed data is a valid image format
+                if let Some(content_type) = detect_image_format(&decompressed_data) {
+                    let final_data = if content_type != "image/jpeg" {
+                        match convert_to_png(&decompressed_data) {
+                            Ok(png_data) => png_data,
+                            Err(err) => {
+                                return HttpResponse::InternalServerError()
+                                    .body(format!("Conversion error: {}", err));
+                            }
+                        }
+                    } else {
+                        decompressed_data
+                    };
+
+                    // Return the decompressed data as an image (PNG if converted)
+                    HttpResponse::Ok()
+                        .content_type("image/png")
+                        .insert_header((
+                            "Content-Disposition",
+                            format!(
+                                "attachment; filename=decompressed_base_id_{}.png",
+                                index_number
+                            ),
+                        ))
+                        .body(final_data)
+                } else {
+                    HttpResponse::BadRequest()
+                        .body("Decompressed data is not a valid image format.")
+                }
+            }
+            Err(err) => {
+                HttpResponse::InternalServerError().body(format!("Error extracting data: {}", err))
+            }
+        }
+    } else {
+        HttpResponse::InternalServerError().body("DAT file not loaded.")
+    }
+}
+
+async fn convert_to_image_file_id(
+    data: web::Data<AppState>,
+    path: web::Path<u32>,
+) -> impl Responder {
+    let index_number = path.into_inner();
+
+    let mut dat_file = data.dat_file.lock().unwrap();
+    if let Some(dat_file) = dat_file.as_mut() {
+        match dat_file.extract_mft_data(ArchiveId::FileId, index_number as usize) {
+            Ok((_, decompressed_data)) => {
+                // Check if the decompressed data is a valid image format
+                if let Some(content_type) = detect_image_format(&decompressed_data) {
+                    let final_data = if content_type != "image/jpeg" {
+                        match convert_to_png(&decompressed_data) {
+                            Ok(png_data) => png_data,
+                            Err(err) => {
+                                return HttpResponse::InternalServerError()
+                                    .body(format!("Conversion error: {}", err));
+                            }
+                        }
+                    } else {
+                        decompressed_data
+                    };
+
+                    // Return the decompressed data as an image (PNG if converted)
+                    HttpResponse::Ok()
+                        .content_type("image/png")
+                        .insert_header((
+                            "Content-Disposition",
+                            format!(
+                                "attachment; filename=decompressed_file_id_{}.png",
+                                index_number
+                            ),
+                        ))
+                        .body(final_data)
+                } else {
+                    HttpResponse::BadRequest()
+                        .body("Decompressed data is not a valid image format.")
+                }
+            }
             Err(err) => {
                 HttpResponse::InternalServerError().body(format!("Error extracting data: {}", err))
             }
