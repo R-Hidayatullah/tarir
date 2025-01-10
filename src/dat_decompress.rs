@@ -1,5 +1,5 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::Cursor;
+use std::io::{Cursor, Seek};
 
 const MAX_BITS_HASH: usize = 8;
 const MAX_CODE_BITS_LENGTH: usize = 32;
@@ -258,6 +258,10 @@ fn inflate_data(
 
         let mut current_code_read_count: u32 = 0;
         while (current_code_read_count < max_count) && (output_position < *output_data_size) {
+            if state_data.input_buffer.stream_len()? == state_data.buffer_position_bytes {
+                break;
+            }
+
             current_code_read_count = current_code_read_count.wrapping_add(1);
             let mut symbol_data = 0;
             read_code(&mut huffmantree_symbol, state_data, &mut symbol_data)?;
@@ -332,6 +336,10 @@ fn inflate_data(
                 output_position = output_position.wrapping_add(1);
                 already_written = already_written.wrapping_add(1);
             }
+        }
+
+        if state_data.input_buffer.stream_len()? == state_data.buffer_position_bytes {
+            break;
         }
     }
     Ok(())
