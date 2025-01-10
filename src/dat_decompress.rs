@@ -85,11 +85,6 @@ fn read_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<u32
     let mut value = state_data.head_data >> (std::mem::size_of::<u32>() as u8 * 8 - bits_number);
 
     if state_data.bytes_available_data < bits_number {
-        println!(
-            "Not enough bits available to read the value. In position: {}",
-            state_data.input_buffer.position()
-        );
-
         // If the number of bits is less than 32, pad with zeros
         if bits_number < 32 {
             let padding_bits = 32 - bits_number;

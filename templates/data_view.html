@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Extracted Data</title>
+</head>
+
+<body>
+    <h1>Extracted Data for Index {{ index_number }}</h1>
+
+    <p><strong>Raw Data:</strong></p>
+    <p>Raw Data Length: {{ raw_data_length }} bytes</p>
+    <pre>{{ raw_data }}</pre>
+    <a href="/download/base_id/{{ index_number }}" download="raw_data_{{ index_number }}.dat">
+        <button>Download Raw Compressed Data</button>
+    </a>
+
+    <p><strong>Decompressed Data:</strong></p>
+    <p>Decompressed Data Length: {{ decompressed_data_length }} bytes</p>
+    <pre>{{ decompressed_data }}</pre>
+    <a href="/download/file_id/{{ index_number }}" download="decompressed_data_{{ index_number }}.dat">
+        <button>Download Decompressed Data</button>
+    </a>
+
+</body>
+
+</html>

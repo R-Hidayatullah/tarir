@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use byteorder::{LittleEndian, ReadBytesExt};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -20,7 +21,7 @@ pub enum ArchiveId {
     BaseId,
 }
 
-#[derive(Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct DatHeader {
     /// The version of the DAT file format. Usually set to 151.
     pub version: u8,
@@ -44,7 +45,7 @@ pub struct DatHeader {
     pub flag: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MftHeader {
     /// A 4-character ASCII identifier, typically "Mft→".
     pub identifier: [u8; MFT_MAGIC_NUMBER],
@@ -58,7 +59,7 @@ pub struct MftHeader {
     pub unknown_field_3: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MftData {
     /// The offset in the file where the data for this entry begins.
     pub offset: u64,
@@ -80,7 +81,7 @@ pub struct MftData {
     pub crc_32c_data: Vec<(u64, u32)>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MftIndexData {
     /// A unique identifier for a specific self.dat_file. Multiple file IDs can reference the same base ID, indicating that these files are related or derived from the same source.
     pub file_id: u32,
@@ -210,24 +211,41 @@ impl DatFile {
         &mut self,
         archive_id: ArchiveId,
         number: usize,
-    ) -> std::io::Result<(Vec<u8>, Vec<u8>, String)> {
-        let mut index_found: usize = 0;
+    ) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+        let mut index_found: Option<usize> = None;
+
         match archive_id {
             ArchiveId::FileId => {
                 for i in 0..self.mft_index_data.len() {
                     if self.mft_index_data.get(i).unwrap().file_id as usize == number {
-                        index_found = self.mft_index_data.get(i).unwrap().base_id as usize - 1;
+                        index_found =
+                            Some(self.mft_index_data.get(i).unwrap().base_id as usize - 1);
+                        break;
                     }
                 }
             }
             ArchiveId::BaseId => {
                 for i in 0..self.mft_index_data.len() {
                     if self.mft_index_data.get(i).unwrap().base_id as usize == number {
-                        index_found = self.mft_index_data.get(i).unwrap().base_id as usize - 1;
+                        index_found =
+                            Some(self.mft_index_data.get(i).unwrap().base_id as usize - 1);
+                        break;
                     }
                 }
             }
         }
+
+        // Check if index_found is set
+        let index_found = match index_found {
+            Some(index) => index,
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "MFT entry not found",
+                ));
+            }
+        };
+
         let mft_entry = self.mft_data.get(index_found).unwrap();
         #[allow(unused_mut)]
         let raw_data_size = self.mft_data.get(index_found).unwrap().size;
@@ -246,25 +264,27 @@ impl DatFile {
 
         // Check the size of the raw data
         if raw_data_size > CHUNK_SIZE as u32 {
-            // If data is larger than 0x10000, remove 4 bytes in each cycle
-            while raw_data_cleaned.len() > raw_data_size as usize - 4 {
-                // Remove 4 bytes from the specified range
-                raw_data_cleaned.drain(start_index..end_index);
+            // If data is larger than CHUNK_SIZE, remove 4 bytes in each cycle
+            let mut position = 0;
+            while position + CHUNK_SIZE <= raw_data_cleaned.len() {
+                // Remove 4 bytes from the specified range for each chunk
+                raw_data_cleaned.drain(position + start_index..position + end_index);
+                position += CHUNK_SIZE - 4; // Move to the next chunk
             }
+
+            // After processing full chunks, handle the remaining data
             if raw_data_cleaned.len() > 4 {
-                raw_data_cleaned.truncate(raw_data_cleaned.len() - 4);
+                raw_data_cleaned.truncate(raw_data_cleaned.len() - 4); // Remove 4 bytes before EOF
             }
         } else if raw_data_size == CHUNK_SIZE as u32 {
-            // If data is exactly 0x10000, remove 4 bytes from the specified range
+            // If data is exactly CHUNK_SIZE, remove 4 bytes from the specified range
             raw_data_cleaned.drain(start_index..end_index);
         } else if raw_data_size < CHUNK_SIZE as u32 {
-            // If data is smaller than 0x10000, no removal, just truncate the last 4 bytes
+            // If data is smaller than CHUNK_SIZE, no removal, just truncate the last 4 bytes
             if raw_data_cleaned.len() > 4 {
                 raw_data_cleaned.truncate(raw_data_cleaned.len() - 4);
             }
         }
-
-        let name_file = index_found.to_string();
 
         if mft_entry.compression_flag != 0 {
             let mut decompressed_data_size: u32 = 0;
@@ -275,44 +295,43 @@ impl DatFile {
                 &mut decompressed_data,
             )?;
 
-            return Ok((raw_data, decompressed_data, name_file));
+            return Ok((raw_data, decompressed_data));
         } else {
-            Ok((raw_data, raw_data_cleaned, name_file))
+            Ok((raw_data, raw_data_cleaned))
         }
     }
 }
 
 /// Print a hex dump of the given buffer.
-pub fn hex_dump(buffer: &Vec<u8>) {
-    const BYTES_PER_LINE: usize = 16;
-
-    for (i, chunk) in buffer.chunks(BYTES_PER_LINE).enumerate() {
-        if i == 16 {
+pub fn hex_dump(buffer: &Vec<u8>, bytes_per_line: usize, max_lines: usize) -> String {
+    let mut result = String::new();
+    for (i, chunk) in buffer.chunks(bytes_per_line).enumerate() {
+        if i == max_lines {
             break;
         }
         // Print the offset
-        print!("{:08X}: ", i * BYTES_PER_LINE);
+        result.push_str(&format!("{:08X}: ", i * bytes_per_line));
 
         // Print the hexadecimal representation
         for byte in chunk {
-            print!("{:02X} ", byte);
+            result.push_str(&format!("{:02X} ", byte));
         }
 
         // Pad the last line with spaces if necessary
-        for _ in 0..(BYTES_PER_LINE - chunk.len()) {
-            print!("   ");
+        for _ in 0..(bytes_per_line - chunk.len()) {
+            result.push_str("   ");
         }
 
         // Print the ASCII representation
-        print!("|");
+        result.push_str("|");
         for byte in chunk {
             if byte.is_ascii_graphic() || *byte == b' ' {
-                print!("{}", *byte as char);
+                result.push(*byte as char);
             } else {
-                print!(".");
+                result.push('.');
             }
         }
-        println!("|");
+        result.push_str("|\n");
     }
-    println!()
+    result
 }
