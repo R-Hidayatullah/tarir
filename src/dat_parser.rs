@@ -1,9 +1,7 @@
 #![allow(dead_code)]
-
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, Write};
-use std::os::windows::fs::MetadataExt;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::dat_decompress;
@@ -14,6 +12,8 @@ const DAT_MAGIC_NUMBER: usize = 3;
 const MFT_MAGIC_NUMBER: usize = 4;
 /// Index in the MFT data where the base ID and file ID are stored.
 const MFT_ENTRY_INDEX_NUM: usize = 1;
+
+const CHUNK_SIZE: usize = 0x10000;
 
 pub enum ArchiveId {
     FileId,
@@ -74,7 +74,7 @@ pub struct MftData {
     pub crc: u32,
 
     /// Customized data, is not part of the game real data
-    /// Skipped when parsing data first time, becaus its take long time
+    /// Skipped when parsing data first time, because it takes a long time
     pub uncompressed_size: u32,
     /// u64 for position crc_32c data begin, the other one is the data itself 4 of u8 data in u32
     pub crc_32c_data: Vec<(u64, u32)>,
@@ -103,31 +103,28 @@ impl DatFile {
     /// Load a `.dat` file and parse its contents into a `DatFile` structure.
     pub fn load<P: AsRef<Path>>(file_path: P) -> std::io::Result<DatFile> {
         // Check if the file extension is '.dat'
-        let file_path_str = file_path.as_ref().to_str().unwrap_or("").to_string();
-        if !&file_path_str.to_lowercase().ends_with(".dat") {
+        let file_path_str = file_path.as_ref().to_str().unwrap_or_default().to_string();
+        if !file_path_str.to_lowercase().ends_with(".dat") {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid file extension. Expected '.dat'.",
             ));
         }
 
-        let file_path_data = file_path_str.clone();
         // Open the file and create a buffered reader.
         let file = File::open(file_path)?;
+        let mut dat_file = BufReader::new(file);
 
         // Initialize the DatFile structure with default values.
         let mut data_dat_file = DatFile {
-            filename: String::new(),
-            file_size: 0,
+            filename: file_path_str,
+            file_size: dat_file.stream_len()?,
             dat_header: Default::default(),
             mft_header: Default::default(),
             mft_data: Default::default(),
             mft_index_data: Default::default(),
-            dat_file: BufReader::new(file),
+            dat_file,
         };
-
-        data_dat_file.filename = file_path_data;
-        data_dat_file.file_size = data_dat_file.dat_file.stream_len()?;
 
         // Read and parse the headers and data.
         data_dat_file.read_dat_header()?;
@@ -156,14 +153,13 @@ impl DatFile {
     /// Read and parse the MFT file header.
     fn read_mft_header(&mut self) -> std::io::Result<()> {
         self.dat_file
-            .seek(std::io::SeekFrom::Start(self.dat_header.mft_offset))?;
+            .seek(SeekFrom::Start(self.dat_header.mft_offset))?;
         self.dat_file.read_exact(&mut self.mft_header.identifier)?;
         self.mft_header.unknown_field = self.dat_file.read_u64::<LittleEndian>()?;
         self.mft_header.mft_entry_size = self.dat_file.read_u32::<LittleEndian>()?;
         self.mft_header.unknown_field_2 = self.dat_file.read_u32::<LittleEndian>()?;
         self.mft_header.unknown_field_3 = self.dat_file.read_u32::<LittleEndian>()?;
-        self.mft_header.mft_entry_size = self.mft_header.mft_entry_size - 1;
-
+        self.mft_header.mft_entry_size -= 1; // Adjust size based on data format
         Ok(())
     }
 
@@ -192,12 +188,15 @@ impl DatFile {
 
     /// Read and parse the MFT index data.
     fn read_mft_index_data(&mut self) -> std::io::Result<()> {
-        let num_index_entries = self.mft_data.get(MFT_ENTRY_INDEX_NUM).unwrap().size
-            / std::mem::size_of::<MftIndexData>() as u32;
-        let mft_index_data_offset = self.mft_data.get(MFT_ENTRY_INDEX_NUM).unwrap().offset;
+        let num_index_entries = self.mft_data.get(MFT_ENTRY_INDEX_NUM).map_or(0, |entry| {
+            entry.size / std::mem::size_of::<MftIndexData>() as u32
+        });
+        let mft_index_data_offset = self
+            .mft_data
+            .get(MFT_ENTRY_INDEX_NUM)
+            .map_or(0, |entry| entry.offset);
 
-        self.dat_file
-            .seek(std::io::SeekFrom::Start(mft_index_data_offset))?;
+        self.dat_file.seek(SeekFrom::Start(mft_index_data_offset))?;
 
         for _ in 0..num_index_entries {
             let file_id = self.dat_file.read_u32::<LittleEndian>()?;
@@ -211,14 +210,12 @@ impl DatFile {
         &mut self,
         archive_id: ArchiveId,
         number: usize,
-    ) -> std::io::Result<(Vec<u8>, String)> {
+    ) -> std::io::Result<(Vec<u8>, Vec<u8>, String)> {
         let mut index_found: usize = 0;
         match archive_id {
             ArchiveId::FileId => {
                 for i in 0..self.mft_index_data.len() {
                     if self.mft_index_data.get(i).unwrap().file_id as usize == number {
-                        println!("Found : {:#?}", self.mft_index_data.get(i).unwrap());
-
                         index_found = self.mft_index_data.get(i).unwrap().base_id as usize - 1;
                     }
                 }
@@ -226,126 +223,96 @@ impl DatFile {
             ArchiveId::BaseId => {
                 for i in 0..self.mft_index_data.len() {
                     if self.mft_index_data.get(i).unwrap().base_id as usize == number {
-                        println!("Found : {:#?}", self.mft_index_data.get(i).unwrap());
                         index_found = self.mft_index_data.get(i).unwrap().base_id as usize - 1;
                     }
                 }
             }
         }
         let mft_entry = self.mft_data.get(index_found).unwrap();
-        println!("Inside : {:#?}", mft_entry);
-        println!("MFT Chunk CRC 32C : {:08X?}", mft_entry.crc);
-        let buffer_size = self.mft_data.get(index_found).unwrap().size;
+        #[allow(unused_mut)]
+        let raw_data_size = self.mft_data.get(index_found).unwrap().size;
         self.dat_file
             .seek(std::io::SeekFrom::Start(mft_entry.offset))?;
 
-        let mut buffer_data = Vec::with_capacity(buffer_size as usize);
+        let mut raw_data = Vec::with_capacity(raw_data_size as usize);
+        raw_data.resize(raw_data_size as usize, 0);
+        self.dat_file.read_exact(&mut raw_data)?;
+        let mut raw_data_cleaned = raw_data.clone();
 
-        let mut result_crc: Vec<u32> = Vec::new();
+        // CRC-32C (Cyclic Redundancy Check 32-bit Castagnoli) is a variant of the CRC-32 algorithm that uses the Castagnoli polynomial.
+        // Define the range to remove 4 bytes from each cycle
+        let start_index = CHUNK_SIZE - 4; // Start of the range to remove
+        let end_index = CHUNK_SIZE; // End of the range to remove
 
-        #[allow(unused_assignments)]
-        let mut name_file = String::new();
-
-        let chunk_count = buffer_size / 0x10000;
-        let last_chunk_size: usize = (buffer_size as usize % 0x10000) - 4;
-
-        println!(
-            "Chunk count : {} Chunk size : {}",
-            chunk_count, last_chunk_size
-        );
-
-        if chunk_count >= 1 {
-            for _ in 0..chunk_count {
-                let mut chunk_buffer: Vec<u8> = Vec::with_capacity(0x10000 - 4);
-                chunk_buffer.resize(0x10000 - 4, 0);
-                self.dat_file.read_exact(&mut chunk_buffer)?;
-                buffer_data.append(&mut chunk_buffer);
-                result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
+        // Check the size of the raw data
+        if raw_data_size > CHUNK_SIZE as u32 {
+            // If data is larger than 0x10000, remove 4 bytes in each cycle
+            while raw_data_cleaned.len() > raw_data_size as usize - 4 {
+                // Remove 4 bytes from the specified range
+                raw_data_cleaned.drain(start_index..end_index);
+            }
+            if raw_data_cleaned.len() > 4 {
+                raw_data_cleaned.truncate(raw_data_cleaned.len() - 4);
+            }
+        } else if raw_data_size == CHUNK_SIZE as u32 {
+            // If data is exactly 0x10000, remove 4 bytes from the specified range
+            raw_data_cleaned.drain(start_index..end_index);
+        } else if raw_data_size < CHUNK_SIZE as u32 {
+            // If data is smaller than 0x10000, no removal, just truncate the last 4 bytes
+            if raw_data_cleaned.len() > 4 {
+                raw_data_cleaned.truncate(raw_data_cleaned.len() - 4);
             }
         }
 
-        let mut last_chunk_buffer: Vec<u8> = Vec::with_capacity(last_chunk_size);
-        last_chunk_buffer.resize(last_chunk_size, 0);
-        self.dat_file.read_exact(&mut last_chunk_buffer)?;
-        buffer_data.append(&mut last_chunk_buffer);
-        result_crc.push(self.dat_file.read_u32::<LittleEndian>()?);
-
-        for crc_data in result_crc {
-            println!("CRC 32C : {:08X?}", crc_data);
-        }
-
-        // let mut dump_data = File::create("buffer_19.bin")?;
-        // dump_data.write_all(&buffer_data)?;
-
-        println!("\nBuffer Length : {}", buffer_size);
-        println!("\nActual Buffer Length : {}", buffer_data.len());
-
-        self.hex_dump(&buffer_data);
-        name_file = index_found.to_string();
+        let name_file = index_found.to_string();
 
         if mft_entry.compression_flag != 0 {
-            println!("File data is compressed!");
-
-            let mut output_data_size: u32 = 0;
-            let mut output_data: Vec<u8> = Vec::new();
+            let mut decompressed_data_size: u32 = 0;
+            let mut decompressed_data: Vec<u8> = Vec::new();
             dat_decompress::inflate_dat_file_buffer(
-                buffer_data,
-                &mut output_data_size,
-                &mut output_data,
+                raw_data_cleaned,
+                &mut decompressed_data_size,
+                &mut decompressed_data,
             )?;
 
-            // let mut texture_output_data_size: u32 = 0;
-            // let mut texture_output_data: Vec<u8> = Vec::new();
-
-            // texture_decompress::inflate_texture_file_buffer(
-            //     output_data.clone(),
-            //     &mut texture_output_data_size,
-            //     &mut texture_output_data,
-            // )?;
-
-            // println!("Texture output data size : {}", texture_output_data_size);
-            println!("\nBuffer Length : {}", output_data.len());
-
-            self.hex_dump(&output_data);
-            return Ok((output_data, name_file));
+            return Ok((raw_data, decompressed_data, name_file));
         } else {
-            println!("File data isn't compressed!");
-            Ok((buffer_data, name_file))
+            Ok((raw_data, raw_data_cleaned, name_file))
         }
     }
+}
 
-    /// Print a hex dump of the given buffer.
-    fn hex_dump(&self, buffer: &Vec<u8>) {
-        const BYTES_PER_LINE: usize = 16;
+/// Print a hex dump of the given buffer.
+pub fn hex_dump(buffer: &Vec<u8>) {
+    const BYTES_PER_LINE: usize = 16;
 
-        for (i, chunk) in buffer.chunks(BYTES_PER_LINE).enumerate() {
-            if i == 8 {
-                break;
-            }
-            // Print the offset
-            print!("{:08X}: ", i * BYTES_PER_LINE);
-
-            // Print the hexadecimal representation
-            for byte in chunk {
-                print!("{:02X} ", byte);
-            }
-
-            // Pad the last line with spaces if necessary
-            for _ in 0..(BYTES_PER_LINE - chunk.len()) {
-                print!("   ");
-            }
-
-            // Print the ASCII representation
-            print!("|");
-            for byte in chunk {
-                if byte.is_ascii_graphic() || *byte == b' ' {
-                    print!("{}", *byte as char);
-                } else {
-                    print!(".");
-                }
-            }
-            println!("|");
+    for (i, chunk) in buffer.chunks(BYTES_PER_LINE).enumerate() {
+        if i == 16 {
+            break;
         }
-        println!()
+        // Print the offset
+        print!("{:08X}: ", i * BYTES_PER_LINE);
+
+        // Print the hexadecimal representation
+        for byte in chunk {
+            print!("{:02X} ", byte);
+        }
+
+        // Pad the last line with spaces if necessary
+        for _ in 0..(BYTES_PER_LINE - chunk.len()) {
+            print!("   ");
+        }
+
+        // Print the ASCII representation
+        print!("|");
+        for byte in chunk {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                print!("{}", *byte as char);
+            } else {
+                print!(".");
+            }
+        }
+        println!("|");
     }
+    println!()
 }

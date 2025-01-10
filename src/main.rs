@@ -1,17 +1,10 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
 #![feature(seek_stream_len)]
 
 use std::env;
-use std::fs::File;
 use std::io;
-use std::io::BufReader;
-use std::io::Read;
-use std::io::Write;
 
 use dat_parser::ArchiveId;
-use image::ImageFormat;
-use image::load_from_memory;
+use dat_parser::hex_dump;
 
 mod dat_decompress;
 mod dat_parser;
@@ -22,11 +15,11 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     // Default values
-    // let default_file_path =
-    //     "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
-    let default_file_path = "Local.dat";
+    let default_file_path =
+        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
+    // let default_file_path = "Local.dat";
 
-    let default_index_number = 19;
+    let default_index_number = 16;
 
     // Parse command line arguments
     let file_path = if args.len() > 1 {
@@ -43,58 +36,15 @@ fn main() -> io::Result<()> {
 
     // Load the DAT file
     let mut dat_file = dat_parser::DatFile::load(file_path)?;
-    println!("Filename : {}", dat_file.filename);
-    println!("File size : {}", dat_file.file_size);
-    println!("{:#?}", dat_file.dat_header);
-    println!("{:#?}", dat_file.mft_header);
 
-    // Extract MFT data with the provided or default index number
-    let (result, name_file) =
+    let (raw_data, decompressed_data, name_file) =
         dat_file.extract_mft_data(ArchiveId::BaseId, index_number as usize)?;
 
-    // let mut dump_data = File::create(format!("{}.bin", default_index_number).to_string())?;
-    // dump_data.write_all(&result)?;
-
-    // save_image(result, format!("{}", default_index_number).as_str());
-
-    // let file_path = "buffer_31_first_chunk.bin"; // Path to your binary file
-    // match compute_crc32c_from_file(file_path) {
-    //     //should be A9C0541F
-    //     Ok(checksum) => {
-    //         println!("CRC-32C checksum: 0x{:08X}", checksum);
-    //     }
-    //     Err(e) => {
-    //         eprintln!("Error reading file: {}", e);
-    //     }
-    // }
+    println!("Filename : {}", name_file);
+    println!("\nCompressed Size : {}", raw_data.len());
+    hex_dump(&raw_data);
+    println!("Decompressed Size : {}", decompressed_data.len());
+    hex_dump(&decompressed_data);
 
     Ok(())
-}
-
-fn save_image(vec_data: Vec<u8>, custom_name: &str) {
-    println!("Load data with name : {}", custom_name);
-
-    let image_data = load_from_memory(&vec_data).unwrap();
-    let mut file_data = File::create(format!("img_{}.png", custom_name)).unwrap();
-
-    image_data
-        .write_to(&mut file_data, ImageFormat::Png)
-        .unwrap();
-    println!("Image saved as : {}.png", custom_name);
-}
-
-fn compute_crc32c_from_file(file_path: &str) -> io::Result<u32> {
-    let file = File::open(file_path)?;
-    let mut reader = BufReader::new(file);
-    let mut buffer = Vec::new();
-
-    // Read the entire file into the buffer
-    reader.read_to_end(&mut buffer)?;
-
-    // Optionally, you can adjust here to compute CRC only over a specific part of the file.
-    // For example, you might want to compute CRC only for the header or data section.
-
-    let result_data = crc32c::crc32c(&buffer);
-    // Compute the CRC-32C checksum
-    Ok(result_data)
 }

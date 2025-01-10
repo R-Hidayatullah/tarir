@@ -1,26 +1,19 @@
-#![allow(dead_code)]
-
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{Cursor, Seek};
+use std::io::Cursor;
 
 const MAX_BITS_HASH: usize = 8;
 const MAX_CODE_BITS_LENGTH: usize = 32;
 const MAX_SYMBOL_VALUE: usize = 285;
-
-// const SKIPPED_BYTES_PER_CHUNK: usize = 65536; // its using CRC-32C in hxd editor
-// CRC-32C (Cyclic Redundancy Check 32-bit Castagnoli) is a variant of the CRC-32 algorithm that uses the Castagnoli polynomial.
-// its in each SKIPPED_BYTES_PER_CHUNK-4 until SKIPPED_BYTES_PER_CHUNK and 4 bytes before the end of chunk
-const SKIPPED_BYTES_PER_CHUNK: usize = 0;
-
-const BYTES_TO_REMOVE: usize = 4; // sizeof(u32)
+const HALF_BYTE: u8 = 4;
+const U8_IN_BITS: u8 = 8;
+const U16_IN_BITS: u8 = 16;
+const U32_IN_BITS: u8 = 32;
 
 #[derive(Debug, Default)]
 struct StateData {
     input_buffer: Cursor<Vec<u8>>,
     buffer_position_bytes: u64,
-    buffer_position_bit: u64,
     bytes_available: u32,
-    skipped_bytes: u32,
     head_data: u32,
     buffer_data: u32,
     bytes_available_data: u8,
@@ -79,7 +72,6 @@ fn pull_byte(
         *head_data = state_data.input_buffer.read_u32::<LittleEndian>()?;
         state_data.bytes_available -= std::mem::size_of::<u32>() as u32;
         state_data.buffer_position_bytes = state_data.input_buffer.position();
-        state_data.buffer_position_bit = state_data.buffer_position_bit + 32;
         *bytes_available_data = (std::mem::size_of::<u32>() as u32 * 8) as u8;
     } else {
         *head_data = 0;
@@ -114,7 +106,6 @@ fn drop_bits(state_data: &mut StateData, bits_number: u8) -> std::io::Result<()>
     }
     #[allow(unused_assignments)]
     let mut new_bits_available: u8 = 0;
-    state_data.buffer_position_bit = state_data.buffer_position_bit + bits_number as u64;
     new_bits_available = state_data.bytes_available_data.wrapping_sub(bits_number);
     if new_bits_available >= std::mem::size_of::<u32>() as u8 * 8 {
         if bits_number == std::mem::size_of::<u32>() as u8 * 8 {
@@ -153,28 +144,30 @@ fn read_code(
     state_data: &mut StateData,
     symbol_data: &mut u16,
 ) -> std::io::Result<()> {
-    let index_num = read_bits(state_data, MAX_BITS_HASH as u8)? as usize;
+    let index_num = read_bits(state_data, U8_IN_BITS as u8)? as usize;
 
     let exist = huffmantree_data.symbol_value_hash_exist[index_num];
 
     if exist {
-        *symbol_data = huffmantree_data.symbol_value_hash
-            [read_bits(state_data, MAX_BITS_HASH as u8)? as usize];
+        *symbol_data =
+            huffmantree_data.symbol_value_hash[read_bits(state_data, U8_IN_BITS as u8)? as usize];
 
         let code_bits_hash =
-            huffmantree_data.code_bits_hash[read_bits(state_data, MAX_BITS_HASH as u8)? as usize];
+            huffmantree_data.code_bits_hash[read_bits(state_data, U8_IN_BITS as u8)? as usize];
 
         drop_bits(state_data, code_bits_hash)?;
     } else {
         let mut index_data: u16 = 0;
-        while read_bits(state_data, 32)? < huffmantree_data.code_comparison[index_data as usize] {
+        while read_bits(state_data, U32_IN_BITS)?
+            < huffmantree_data.code_comparison[index_data as usize]
+        {
             index_data = index_data.wrapping_add(1);
         }
 
         let temp_bits: u8 = huffmantree_data.code_bits[index_data as usize];
 
         // Step 1: Read 32 bits from state_data
-        let read_bits_value = read_bits(state_data, 32)?;
+        let read_bits_value = read_bits(state_data, U32_IN_BITS)?;
 
         // Step 2: Subtract code_comparison from read_bits_value (with wrapping)
         let adjusted_bits = read_bits_value
@@ -202,10 +195,8 @@ pub fn inflate_dat_file_buffer(
     let mut state_data = StateData::default();
     state_data.bytes_available = input_data.len() as u32;
     state_data.input_buffer = Cursor::new(input_data);
-    state_data.skipped_bytes = SKIPPED_BYTES_PER_CHUNK as u32;
     let mut head_data: u32 = 0;
     let mut bytes_available_data: u8 = 0;
-    // println!("Buffer position : {}", state_data.input_buffer.position());
 
     pull_byte(&mut state_data, &mut head_data, &mut bytes_available_data)?;
 
@@ -233,10 +224,10 @@ fn inflate_data(
     #[allow(unused_assignments)]
     let mut write_size_const_addition: u16 = 0;
     let mut max_size_count: u32 = 0;
-    drop_bits(state_data, 4)?;
-    write_size_const_addition = read_bits(state_data, 4)? as u16;
+    drop_bits(state_data, HALF_BYTE)?;
+    write_size_const_addition = read_bits(state_data, HALF_BYTE)? as u16;
     write_size_const_addition += 1;
-    drop_bits(state_data, 4)?;
+    drop_bits(state_data, HALF_BYTE)?;
 
     let mut dat_file_huffmantree_dict = HuffmanTree::default();
     let mut huffmantree_copy = HuffmanTree::default();
@@ -265,10 +256,10 @@ fn inflate_data(
 
         #[allow(unused_assignments)]
         let mut max_count: u32 = 0;
-        max_count = read_bits(state_data, 4)?;
+        max_count = read_bits(state_data, HALF_BYTE)?;
         max_count = (max_count + 1) << 12;
         max_size_count = max_size_count + 1;
-        drop_bits(state_data, 4)?; // Because this dropping using half byte make the read bits not enough data
+        drop_bits(state_data, HALF_BYTE)?;
 
         let mut current_code_read_count: u32 = 0;
         while (current_code_read_count < max_count) && (output_position < *output_data_size) {
@@ -285,7 +276,7 @@ fn inflate_data(
                 continue;
             }
             symbol_data = symbol_data.wrapping_sub(0x100);
-            // Write size
+
             let temp_code_div4_quot = symbol_data / 4;
             let temp_code_div4_rem = symbol_data % 4;
 
@@ -348,297 +339,54 @@ fn inflate_data(
             }
         }
     }
-    println!(
-        "Max size count : {}, read bits : {}, read bytes : {} ",
-        max_size_count,
-        max_size_count * 4,
-        (max_size_count * 4) / 8
-    );
-    println!(
-        "Buffer bits position : {}, Buffer bits size left before EOF : {},",
-        state_data.buffer_position_bit,
-        if (state_data.input_buffer.stream_len()? * 16) > state_data.buffer_position_bit {
-            (state_data.input_buffer.stream_len()? * 16)
-                .wrapping_sub(state_data.buffer_position_bit)
-        } else {
-            0
-        }
-    );
     Ok(())
 }
 
 fn initialize_huffmantree_dict(huffmantree_data: &mut HuffmanTree) -> std::io::Result<bool> {
     let mut huffmantree_builder = HuffmanTreeBuilder::default();
 
-    add_symbol(&mut huffmantree_builder, 0x0A, 3)?;
-    add_symbol(&mut huffmantree_builder, 0x09, 3)?;
-    add_symbol(&mut huffmantree_builder, 0x08, 3)?;
+    let bits_data: [u8; 256] = [
+        3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8,
+        8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+        10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 13,
+        13, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    ];
 
-    add_symbol(&mut huffmantree_builder, 0x0C, 4)?;
-    add_symbol(&mut huffmantree_builder, 0x0B, 4)?;
-    add_symbol(&mut huffmantree_builder, 0x07, 4)?;
-    add_symbol(&mut huffmantree_builder, 0x00, 4)?;
+    let symbols_data: [u16; 256] = [
+        0x0A, 0x09, 0x08, 0x0C, 0x0B, 0x07, 0x00, 0xE0, 0x2A, 0x29, 0x06, 0x4A, 0x40, 0x2C, 0x2B,
+        0x28, 0x20, 0x05, 0x04, 0x49, 0x48, 0x27, 0x26, 0x25, 0x0D, 0x03, 0x6A, 0x69, 0x4C, 0x4B,
+        0x47, 0x24, 0xE8, 0xA0, 0x89, 0x88, 0x68, 0x67, 0x63, 0x60, 0x46, 0x23, 0xE9, 0xC9, 0xC0,
+        0xA9, 0xA8, 0x8A, 0x87, 0x80, 0x66, 0x65, 0x45, 0x44, 0x43, 0x2D, 0x02, 0x01, 0xE5, 0xC8,
+        0xAA, 0xA5, 0xA4, 0x8B, 0x85, 0x84, 0x6C, 0x6B, 0x64, 0x4D, 0x0E, 0xE7, 0xCA, 0xC7, 0xA7,
+        0xA6, 0x86, 0x83, 0xE6, 0xE4, 0xC4, 0x8C, 0x2E, 0x22, 0xEC, 0xC6, 0x6D, 0x4E, 0xEA, 0xCC,
+        0xAC, 0xAB, 0x8D, 0x11, 0x10, 0x0F, 0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8, 0xF7,
+        0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1, 0xF0, 0xEF, 0xEE, 0xED, 0xEB, 0xE3, 0xE2, 0xE1, 0xDF,
+        0xDE, 0xDD, 0xDC, 0xDB, 0xDA, 0xD9, 0xD8, 0xD7, 0xD6, 0xD5, 0xD4, 0xD3, 0xD2, 0xD1, 0xD0,
+        0xCF, 0xCE, 0xCD, 0xCB, 0xC5, 0xC3, 0xC2, 0xC1, 0xBF, 0xBE, 0xBD, 0xBC, 0xBB, 0xBA, 0xB9,
+        0xB8, 0xB7, 0xB6, 0xB5, 0xB4, 0xB3, 0xB2, 0xB1, 0xB0, 0xAF, 0xAE, 0xAD, 0xA3, 0xA2, 0xA1,
+        0x9F, 0x9E, 0x9D, 0x9C, 0x9B, 0x9A, 0x99, 0x98, 0x97, 0x96, 0x95, 0x94, 0x93, 0x92, 0x91,
+        0x90, 0x8F, 0x8E, 0x82, 0x81, 0x7F, 0x7E, 0x7D, 0x7C, 0x7B, 0x7A, 0x79, 0x78, 0x77, 0x76,
+        0x75, 0x74, 0x73, 0x72, 0x71, 0x70, 0x6F, 0x6E, 0x62, 0x61, 0x5F, 0x5E, 0x5D, 0x5C, 0x5B,
+        0x5A, 0x59, 0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51, 0x50, 0x4F, 0x42, 0x41, 0x3F,
+        0x3E, 0x3D, 0x3C, 0x3B, 0x3A, 0x39, 0x38, 0x37, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31, 0x30,
+        0x2F, 0x21, 0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18, 0x17, 0x16, 0x15, 0x14, 0x13,
+        0x12,
+    ];
 
-    add_symbol(&mut huffmantree_builder, 0xE0, 5)?;
-    add_symbol(&mut huffmantree_builder, 0x2A, 5)?;
-    add_symbol(&mut huffmantree_builder, 0x29, 5)?;
-    add_symbol(&mut huffmantree_builder, 0x06, 5)?;
-
-    add_symbol(&mut huffmantree_builder, 0x4A, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x40, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x2C, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x2B, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x28, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x20, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x05, 6)?;
-    add_symbol(&mut huffmantree_builder, 0x04, 6)?;
-
-    add_symbol(&mut huffmantree_builder, 0x49, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x48, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x27, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x26, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x25, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x0D, 7)?;
-    add_symbol(&mut huffmantree_builder, 0x03, 7)?;
-
-    add_symbol(&mut huffmantree_builder, 0x6A, 8)?;
-    add_symbol(&mut huffmantree_builder, 0x69, 8)?;
-    add_symbol(&mut huffmantree_builder, 0x4C, 8)?;
-    add_symbol(&mut huffmantree_builder, 0x4B, 8)?;
-    add_symbol(&mut huffmantree_builder, 0x47, 8)?;
-    add_symbol(&mut huffmantree_builder, 0x24, 8)?;
-
-    add_symbol(&mut huffmantree_builder, 0xE8, 9)?;
-    add_symbol(&mut huffmantree_builder, 0xA0, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x89, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x88, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x68, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x67, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x63, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x60, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x46, 9)?;
-    add_symbol(&mut huffmantree_builder, 0x23, 9)?;
-
-    add_symbol(&mut huffmantree_builder, 0xE9, 10)?;
-    add_symbol(&mut huffmantree_builder, 0xC9, 10)?;
-    add_symbol(&mut huffmantree_builder, 0xC0, 10)?;
-    add_symbol(&mut huffmantree_builder, 0xA9, 10)?;
-    add_symbol(&mut huffmantree_builder, 0xA8, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x8A, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x87, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x80, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x66, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x65, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x45, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x44, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x43, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x2D, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x02, 10)?;
-    add_symbol(&mut huffmantree_builder, 0x01, 10)?;
-
-    add_symbol(&mut huffmantree_builder, 0xE5, 11)?;
-    add_symbol(&mut huffmantree_builder, 0xC8, 11)?;
-    add_symbol(&mut huffmantree_builder, 0xAA, 11)?;
-    add_symbol(&mut huffmantree_builder, 0xA5, 11)?;
-    add_symbol(&mut huffmantree_builder, 0xA4, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x8B, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x85, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x84, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x6C, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x6B, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x64, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x4D, 11)?;
-    add_symbol(&mut huffmantree_builder, 0x0E, 11)?;
-
-    add_symbol(&mut huffmantree_builder, 0xE7, 12)?;
-    add_symbol(&mut huffmantree_builder, 0xCA, 12)?;
-    add_symbol(&mut huffmantree_builder, 0xC7, 12)?;
-    add_symbol(&mut huffmantree_builder, 0xA7, 12)?;
-    add_symbol(&mut huffmantree_builder, 0xA6, 12)?;
-    add_symbol(&mut huffmantree_builder, 0x86, 12)?;
-    add_symbol(&mut huffmantree_builder, 0x83, 12)?;
-
-    add_symbol(&mut huffmantree_builder, 0xE6, 13)?;
-    add_symbol(&mut huffmantree_builder, 0xE4, 13)?;
-    add_symbol(&mut huffmantree_builder, 0xC4, 13)?;
-    add_symbol(&mut huffmantree_builder, 0x8C, 13)?;
-    add_symbol(&mut huffmantree_builder, 0x2E, 13)?;
-    add_symbol(&mut huffmantree_builder, 0x22, 13)?;
-
-    add_symbol(&mut huffmantree_builder, 0xEC, 14)?;
-    add_symbol(&mut huffmantree_builder, 0xC6, 14)?;
-    add_symbol(&mut huffmantree_builder, 0x6D, 14)?;
-    add_symbol(&mut huffmantree_builder, 0x4E, 14)?;
-
-    add_symbol(&mut huffmantree_builder, 0xEA, 15)?;
-    add_symbol(&mut huffmantree_builder, 0xCC, 15)?;
-    add_symbol(&mut huffmantree_builder, 0xAC, 15)?;
-    add_symbol(&mut huffmantree_builder, 0xAB, 15)?;
-    add_symbol(&mut huffmantree_builder, 0x8D, 15)?;
-    add_symbol(&mut huffmantree_builder, 0x11, 15)?;
-    add_symbol(&mut huffmantree_builder, 0x10, 15)?;
-    add_symbol(&mut huffmantree_builder, 0x0F, 15)?;
-
-    add_symbol(&mut huffmantree_builder, 0xFF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xFE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xFD, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xFC, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xFB, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xFA, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF9, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF8, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF7, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF6, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF5, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF4, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xF0, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xEF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xEE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xED, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xEB, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xE3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xE2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xE1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDD, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDC, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDB, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xDA, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD9, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD8, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD7, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD6, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD5, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD4, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xD0, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xCF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xCE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xCD, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xCB, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xC5, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xC3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xC2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xC1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBD, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBC, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBB, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xBA, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB9, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB8, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB7, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB6, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB5, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB4, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xB0, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xAF, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xAE, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xAD, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xA3, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xA2, 16)?;
-    add_symbol(&mut huffmantree_builder, 0xA1, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9D, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9C, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9B, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x9A, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x99, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x98, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x97, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x96, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x95, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x94, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x93, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x92, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x91, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x90, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x8F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x8E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x82, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x81, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7D, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7C, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7B, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x7A, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x79, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x78, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x77, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x76, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x75, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x74, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x73, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x72, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x71, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x70, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x6F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x6E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x62, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x61, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5D, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5C, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5B, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x5A, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x59, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x58, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x57, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x56, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x55, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x54, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x53, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x52, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x51, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x50, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x4F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x42, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x41, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3D, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3C, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3B, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x3A, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x39, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x38, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x37, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x36, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x35, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x34, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x33, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x32, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x31, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x30, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x2F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x21, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1F, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1E, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1D, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1C, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1B, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x1A, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x19, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x18, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x17, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x16, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x15, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x14, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x13, 16)?;
-    add_symbol(&mut huffmantree_builder, 0x12, 16)?;
+    for index in 0..256 {
+        add_symbol(
+            &mut huffmantree_builder,
+            symbols_data[index],
+            bits_data[index],
+        )?;
+    }
 
     if !build_huffmantree(huffmantree_data, &mut huffmantree_builder)? {
         return Ok(false);
@@ -768,8 +516,8 @@ fn parse_huffmantree(
 ) -> std::io::Result<bool> {
     #[allow(unused_assignments)]
     let mut symbol_number: u16 = 0;
-    symbol_number = read_bits(state_data, 16)? as u16;
-    drop_bits(state_data, 16)?;
+    symbol_number = read_bits(state_data, U16_IN_BITS)? as u16;
+    drop_bits(state_data, U16_IN_BITS)?;
     if symbol_number > MAX_SYMBOL_VALUE as u16 {
         println!("Too many symbols to decode.");
     }
