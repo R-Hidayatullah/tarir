@@ -1,5 +1,3 @@
-#![feature(seek_stream_len)]
-
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use std::sync::Mutex;
 use tera::{Context, Tera};
@@ -17,7 +15,7 @@ struct AppState {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let file_path = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Guild Wars 2\\Gw2.dat";
+    let file_path = "/home/ridwan/.local/share/Steam/steamapps/common/Guild Wars 2/Gw2.dat";
     let server_address = "127.0.0.1:8080";
 
     // Initialize the shared state with the DAT file

@@ -115,11 +115,13 @@ impl DatFile {
         // Open the file and create a buffered reader.
         let file = File::open(file_path)?;
         let mut dat_file = BufReader::new(file);
-
+        let _ = dat_file.seek(SeekFrom::End(0));
+        let position = dat_file.stream_position().unwrap();
+        let _ = dat_file.seek(SeekFrom::Start(0));
         // Initialize the DatFile structure with default values.
         let mut data_dat_file = DatFile {
             filename: file_path_str,
-            file_size: dat_file.stream_len()?,
+            file_size: position,
             dat_header: Default::default(),
             mft_header: Default::default(),
             mft_data: Default::default(),
